@@ -1,0 +1,232 @@
+// Strata's point-wise height features: each kernel reads and writes the region's heights in place over the feature's
+// clip, so the order of dispatches is the order of the features. See StrataEval.hlsl for the shared parameters.
+#pragma kernel Fill
+#pragma kernel TextureStamp
+#pragma kernel NoiseStamp
+#pragma kernel SplineFeature
+#pragma kernel BlendLayer
+#pragma kernel ToTiles
+#pragma kernel RockStrataTerrace
+
+#include "StrataEval.hlsl"
+#include "../../Shaders/StrataBands.hlsl"
+
+RWTexture2D<float> _Heights;
+
+// Fill
+float _FillValue;
+
+[numthreads(8, 8, 1)]
+void Fill(uint3 id : SV_DispatchThreadID)
+{
+    int2 local;
+    if (ClipThread(id.xy, local)) return;
+    _Heights[local] = _FillValue;
+}
+
+// TextureStamp
+Texture2D<float4> _StampTexture;
+float _StampHeight;
+
+[numthreads(8, 8, 1)]
+void TextureStamp(uint3 id : SV_DispatchThreadID)
+{
+    int2 local;
+    if (ClipThread(id.xy, local)) return;
+    float2 uv = FootprintUV(WorldPosition(local));
+    float footprint = FootprintWeight(uv);
+    if (footprint <= 0.0) return;
+
+    float height = _Heights[local];
+    float amount = _StampTexture.SampleLevel(sampler_linear_clamp, uv, 0).r * _StampHeight;
+    float weight = footprint * _Strength * MaskWeight(local, height);
+    _Heights[local] = ApplyBlend(height, amount, _FootprintSize.w + amount, weight);
+}
+
+// NoiseStamp
+float4 _Noise;          // type (0 fbm, 1 ridged, 2 billow), 1 / scale, octaves, seed
+float4 _NoiseShape;     // lacunarity, gain, height, unbounded
+
+uint Hash(uint3 v)
+{
+    // pcg3d, reduced to one output
+    v = v * 1664525u + 1013904223u;
+    v.x += v.y * v.z; v.y += v.z * v.x; v.z += v.x * v.y;
+    v ^= v >> 16u;
+    v.x += v.y * v.z; v.y += v.z * v.x; v.z += v.x * v.y;
+    return v.x ^ v.y ^ v.z;
+}
+
+float2 Gradient(int2 cell, uint seed)
+{
+    float angle = (Hash(uint3(asuint(cell), seed)) & 0xffffu) * (6.2831853 / 65536.0);
+    return float2(cos(angle), sin(angle));
+}
+
+// Gradient noise, about -1..1.
+float GradientNoise(float2 p, uint seed)
+{
+    int2 i = (int2)floor(p);
+    float2 f = p - i;
+    float2 u = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
+    float a = dot(Gradient(i, seed), f);
+    float b = dot(Gradient(i + int2(1, 0), seed), f - float2(1, 0));
+    float c = dot(Gradient(i + int2(0, 1), seed), f - float2(0, 1));
+    float d = dot(Gradient(i + int2(1, 1), seed), f - float2(1, 1));
+    return lerp(lerp(a, b, u.x), lerp(c, d, u.x), u.y) * 1.4142;
+}
+
+// 0..1 fractal noise of the chosen type.
+float Fractal(float2 p)
+{
+    int type = (int)_Noise.x;
+    int octaves = (int)_Noise.z;
+    uint seed = (uint)_Noise.w;
+    float sum = 0.0, norm = 0.0, amplitude = 1.0, ridgeWeight = 1.0;
+    for (int o = 0; o < octaves; o++)
+    {
+        float n = GradientNoise(p + float2(o * 17.13, o * 31.71), seed + o * 101u);
+        if (type == 1)
+        {
+            float ridge = 1.0 - abs(n);
+            ridge *= ridge;
+            sum += ridge * amplitude * ridgeWeight;
+            ridgeWeight = saturate(ridge * 1.5);
+        }
+        else if (type == 2) sum += abs(n) * amplitude;
+        else sum += (n * 0.5 + 0.5) * amplitude;
+        norm += amplitude;
+        amplitude *= _NoiseShape.y;
+        p *= _NoiseShape.x;
+    }
+    return saturate(sum / norm);
+}
+
+[numthreads(8, 8, 1)]
+void NoiseStamp(uint3 id : SV_DispatchThreadID)
+{
+    int2 local;
+    if (ClipThread(id.xy, local)) return;
+    float2 position = WorldPosition(local);
+    float2 uv = FootprintUV(position);
+    float footprint = _NoiseShape.w > 0.5 ? 1.0 : FootprintWeight(uv);
+    if (footprint <= 0.0) return;
+
+    // noise moves and turns with the stamp
+    float2 d = position - _Footprint.xy;
+    float2 p = float2(dot(d, float2(_Footprint.z, -_Footprint.w)), dot(d, float2(_Footprint.w, _Footprint.z))) * _Noise.y;
+    float height = _Heights[local];
+    float amount = Fractal(p) * _NoiseShape.z;
+    float weight = footprint * _Strength * MaskWeight(local, height);
+    _Heights[local] = ApplyBlend(height, amount, _FootprintSize.w + amount, weight);
+}
+
+// SplineFeature
+StructuredBuffer<float4> _SplinePositions;  // world position
+StructuredBuffer<float4> _SplineShapes;     // width, falloff, strength, segment starts here
+int _SplineCount;
+float4 _SplineParams;   // mode (0 road, 1 river, 2 ridge), depth, unused, unused
+
+[numthreads(8, 8, 1)]
+void SplineFeature(uint3 id : SV_DispatchThreadID)
+{
+    int2 local;
+    if (ClipThread(id.xy, local)) return;
+    float2 p = WorldPosition(local);
+
+    float best = 1e20;
+    int segment = -1;
+    float along = 0.0;
+    for (int i = 0; i < _SplineCount - 1; i++)
+    {
+        float4 shape = _SplineShapes[i];
+        if (shape.w < 0.5) continue;
+        float2 a = _SplinePositions[i].xz;
+        float2 b = _SplinePositions[i + 1].xz;
+        float reach = max(shape.x * 0.5 + shape.y, _SplineShapes[i + 1].x * 0.5 + _SplineShapes[i + 1].y);
+        float2 lo = min(a, b) - reach, hi = max(a, b) + reach;
+        if (any(p < lo) || any(p > hi)) continue;
+        float2 ab = b - a;
+        float t = saturate(dot(p - a, ab) / max(dot(ab, ab), 1e-6));
+        float d = length(p - (a + ab * t));
+        if (d < best)
+        {
+            best = d;
+            segment = i;
+            along = t;
+        }
+    }
+    if (segment < 0) return;
+
+    float4 shape = lerp(_SplineShapes[segment], _SplineShapes[segment + 1], along);
+    float splineHeight = lerp(_SplinePositions[segment].y, _SplinePositions[segment + 1].y, along);
+    float halfWidth = shape.x * 0.5;
+    if (best > halfWidth + shape.y) return;
+
+    float weight = best <= halfWidth ? 1.0 : SampleCurve(_Curve, (best - halfWidth) / max(shape.y, 1e-3));
+    float profile = SampleCurve(_Profile, best / max(halfWidth, 1e-3));
+    int mode = (int)_SplineParams.x;
+    float offset = mode == 1 ? -_SplineParams.y * profile : mode == 2 ? _SplineParams.y * profile : 0.0;
+
+    float height = _Heights[local];
+    weight *= shape.z * _Strength * MaskWeight(local, height);
+    _Heights[local] = ApplyBlend(height, offset, splineHeight + offset, weight);
+}
+
+// BlendLayer: a group's finished layer, blended into the heights it was evaluated over.
+Texture2D<float> _Layer;
+
+[numthreads(8, 8, 1)]
+void BlendLayer(uint3 id : SV_DispatchThreadID)
+{
+    int2 local;
+    if (ClipThread(id.xy, local)) return;
+    float height = _Heights[local];
+    float value = _Layer[local];
+    _Heights[local] = ApplyBlend(height, value, value, _Strength * MaskWeight(local, height));
+}
+
+// ToTiles: writes region heights into one tile slice as 0..1 of the height range. _Clip is in tile-local samples here.
+RWTexture2DArray<float> _Tiles;
+Texture2D<float> _Source;
+int4 _Tile;             // slice, tile origin world sample x, z, unused
+float2 _HeightRange;    // min, range
+
+[numthreads(8, 8, 1)]
+void ToTiles(uint3 id : SV_DispatchThreadID)
+{
+    int2 local;
+    if (ClipThread(id.xy, local)) return;
+    int2 regionLocal = _Tile.yz + local - _Region.xy;
+    _Tiles[uint3(local, _Tile.x)] = saturate((_Source[regionLocal] - _HeightRange.x) / _HeightRange.y);
+}
+
+// RockStrataTerrace: terraces steep ground into ledges along the rock beds. The slope is read from the heights before
+// this feature (_Before), so the ledges it makes don't change where it acts.
+float4 _Band0;
+float4 _Band1;
+float4 _Band2;
+float4 _StrataSlope;    // start, full (degrees), unused, unbounded
+
+[numthreads(8, 8, 1)]
+void RockStrataTerrace(uint3 id : SV_DispatchThreadID)
+{
+    int2 local;
+    if (ClipThread(id.xy, local)) return;
+    float2 p = WorldPosition(local);
+    float footprint = _StrataSlope.w > 0.5 ? 1.0 : FootprintWeight(FootprintUV(p));
+    if (footprint <= 0.0) return;
+
+    float dx = (BeforeAt(local + int2(1, 0)) - BeforeAt(local - int2(1, 0))) / (2.0 * _Grid.z);
+    float dz = (BeforeAt(local + int2(0, 1)) - BeforeAt(local - int2(0, 1))) / (2.0 * _Grid.z);
+    float slope = degrees(atan(length(float2(dx, dz))));
+    float steep = smoothstep(_StrataSlope.x, _StrataSlope.y, slope);
+    if (steep <= 0.0) return;
+
+    StrataDefinition d = UnpackStrata(_Band0, _Band1, _Band2);
+    float height = _Heights[local];
+    float tilt = dot(p, d.dip);
+    float terraced = StrataTerrace(d, height + tilt) - tilt;
+    float weight = footprint * steep * d.terraceStrength * _Strength * MaskWeight(local, height);
+    _Heights[local] = lerp(height, terraced, weight);
+}

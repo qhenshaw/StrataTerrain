@@ -1,0 +1,608 @@
+// Strata's splat evaluation. It runs after the heights are final (it reads them from the world's height tile array)
+// and works one tile at a time on two float4 textures at splat resolution: the four layer indices held per texel and
+// their weights. Painting a layer with opacity a scales the existing weights by 1 - a and adds a for that layer,
+// merging with a slot that already holds it or replacing the weakest slot. The moisture kernels build a coarse
+// world-wide map (flow accumulation and distance to water) that the rules sample. The tree kernels run per tile after
+// the splats: each forest's density at splat resolution, from its rule over the finished heights, moisture and splats,
+// then scaled by the tree effects of the features below it.
+#pragma kernel MoistureHeights
+#pragma kernel FlowReceivers
+#pragma kernel FlowStep
+#pragma kernel WaterSeed
+#pragma kernel RiverSeed
+#pragma kernel JumpFlood
+#pragma kernel MoistureCombine
+#pragma kernel SplatInit
+#pragma kernel SplatRules
+#pragma kernel PaintFeature
+#pragma kernel SplatWrite
+#pragma kernel RockInit
+#pragma kernel RockStrataMap
+#pragma kernel RockWrite
+#pragma kernel TreeInit
+#pragma kernel TreeScatter
+#pragma kernel TreeEffect
+#pragma kernel TreeWrite
+#pragma kernel GrassInit
+#pragma kernel GrassScatter
+#pragma kernel GrassWrite
+
+#include "StrataEval.hlsl"
+
+// the world's heights: one slice per tile, 0..1 of the height range
+Texture2DArray<float> _HeightTiles;
+float4 _TileGrid;       // tiles x, tiles z, tile size, quads per tile
+float4 _HeightRange;    // min, range
+
+float HeightAt(float2 positionXZ)
+{
+    float2 relative = (positionXZ - _Grid.xy) / _TileGrid.z;
+    float2 tile = clamp(floor(relative), 0.0, _TileGrid.xy - 1.0);
+    float2 uv = (clamp(relative - tile, 0.0, 1.0) * _TileGrid.w + 0.5) / (_TileGrid.w + 1.0);
+    return _HeightRange.x + _HeightTiles.SampleLevel(sampler_linear_clamp, float3(uv, tile.y * _TileGrid.x + tile.x), 0) * _HeightRange.y;
+}
+
+// Moisture map ------------------------------------------------------------------------------------------------------
+float4 _Coarse;         // origin x, origin z, spacing, unused
+int2 _CoarseSize;
+RWTexture2D<float> _CoarseHeight;
+Texture2D<float> _CoarseHeightIn;
+RWTexture2D<int> _Receiver;
+Texture2D<int> _ReceiverIn;
+RWTexture2D<float> _FlowOut;
+Texture2D<float> _FlowIn;
+RWTexture2D<float2> _Seed;
+Texture2D<float2> _SeedIn;
+RWTexture2D<float> _Moisture;
+Texture2D<float> _MoistureIn;
+float4 _Water;          // use sea level, sea level, water reach (m), log of flow (in cells) for full moisture
+int _JumpStep;
+StructuredBuffer<float4> _RiverPoints;  // x, z, half width, unused
+int _RiverCount;
+
+static const int2 Neighbours8[8] = { int2(-1, 0), int2(1, 0), int2(0, -1), int2(0, 1), int2(-1, -1), int2(1, -1), int2(-1, 1), int2(1, 1) };
+static const float Distances8[8] = { 1, 1, 1, 1, 1.41421356, 1.41421356, 1.41421356, 1.41421356 };
+
+bool InCoarse(int2 p)
+{
+    return all(p >= 0) && all(p < _CoarseSize);
+}
+
+[numthreads(8, 8, 1)]
+void MoistureHeights(uint3 id : SV_DispatchThreadID)
+{
+    if (any((int2)id.xy >= _CoarseSize)) return;
+    _CoarseHeight[id.xy] = HeightAt(_Coarse.xy + id.xy * _Coarse.z);
+}
+
+// Each cell drains to its steepest-descent neighbour (D8), or nowhere (-1) in a pit.
+[numthreads(8, 8, 1)]
+void FlowReceivers(uint3 id : SV_DispatchThreadID)
+{
+    int2 p = (int2)id.xy;
+    if (any(p >= _CoarseSize)) return;
+    float h = _CoarseHeightIn[p];
+    float best = 0.0;
+    int receiver = -1;
+    for (int n = 0; n < 8; n++)
+    {
+        int2 q = p + Neighbours8[n];
+        if (!InCoarse(q)) continue;
+        float drop = (h - _CoarseHeightIn[q]) / Distances8[n];
+        if (drop > best) { best = drop; receiver = n; }
+    }
+    _Receiver[p] = receiver;
+}
+
+// One Jacobi step of flow accumulation: a cell's flow is one cell of its own plus the flow of every neighbour
+// draining into it. Repeated until the longest drainage path has been walked.
+[numthreads(8, 8, 1)]
+void FlowStep(uint3 id : SV_DispatchThreadID)
+{
+    int2 p = (int2)id.xy;
+    if (any(p >= _CoarseSize)) return;
+    float flow = 1.0;
+    for (int n = 0; n < 8; n++)
+    {
+        int2 q = p + Neighbours8[n];
+        if (!InCoarse(q)) continue;
+        int r = _ReceiverIn[q];
+        if (r >= 0 && all(q + Neighbours8[r] == p)) flow += _FlowIn[q];
+    }
+    _FlowOut[p] = flow;
+}
+
+[numthreads(8, 8, 1)]
+void WaterSeed(uint3 id : SV_DispatchThreadID)
+{
+    int2 p = (int2)id.xy;
+    if (any(p >= _CoarseSize)) return;
+    bool water = _Water.x > 0.5 && _CoarseHeightIn[p] < _Water.y;
+    _Seed[p] = water ? (float2)p : float2(-1e6, -1e6);
+}
+
+// Marks the coarse cells under River splines as water.
+[numthreads(64, 1, 1)]
+void RiverSeed(uint3 id : SV_DispatchThreadID)
+{
+    if ((int)id.x >= _RiverCount) return;
+    float4 river = _RiverPoints[id.x];
+    float2 cell = (river.xy - _Coarse.xy) / _Coarse.z;
+    int reach = (int)ceil(river.z / _Coarse.z);
+    for (int z = -reach; z <= reach; z++)
+    for (int x = -reach; x <= reach; x++)
+    {
+        int2 q = (int2)round(cell) + int2(x, z);
+        if (!InCoarse(q) || length((float2)q - cell) * _Coarse.z > river.z + _Coarse.z * 0.5) continue;
+        _Seed[q] = (float2)q;
+    }
+}
+
+// Jump flooding: each cell keeps the nearest water seed seen among its neighbours at the current step distance.
+[numthreads(8, 8, 1)]
+void JumpFlood(uint3 id : SV_DispatchThreadID)
+{
+    int2 p = (int2)id.xy;
+    if (any(p >= _CoarseSize)) return;
+    float2 best = _SeedIn[p];
+    float bestDistance = distance(best, (float2)p);
+    for (int z = -1; z <= 1; z++)
+    for (int x = -1; x <= 1; x++)
+    {
+        int2 q = p + int2(x, z) * _JumpStep;
+        if (!InCoarse(q)) continue;
+        float2 seed = _SeedIn[q];
+        float d = distance(seed, (float2)p);
+        if (d < bestDistance) { best = seed; bestDistance = d; }
+    }
+    _Seed[p] = best;
+}
+
+[numthreads(8, 8, 1)]
+void MoistureCombine(uint3 id : SV_DispatchThreadID)
+{
+    int2 p = (int2)id.xy;
+    if (any(p >= _CoarseSize)) return;
+    float flow = saturate(log(_FlowIn[p]) / max(_Water.w, 1e-3));
+    float2 seed = _SeedIn[p];
+    float waterDistance = seed.x < -1e5 ? 1e9 : distance(seed, (float2)p) * _Coarse.z;
+    float water = _Water.z > 0.0 ? saturate(1.0 - waterDistance / _Water.z) : (waterDistance <= 0.0 ? 1.0 : 0.0);
+    _Moisture[p] = max(flow, water);
+}
+
+float MoistureAt(float2 positionXZ)
+{
+    float2 uv = ((positionXZ - _Coarse.xy) / _Coarse.z + 0.5) / (float2)_CoarseSize;
+    return _MoistureIn.SampleLevel(sampler_linear_clamp, uv, 0);
+}
+
+// Splats --------------------------------------------------------------------------------------------------------------
+RWTexture2D<float4> _SplatIndex;
+RWTexture2D<float4> _SplatWeight;
+int4 _SplatTile;        // slice, tile x, tile z, splat quads per tile
+float _SplatSpacing;
+
+float2 TexelPosition(int2 texel)
+{
+    return _Grid.xy + (float2(_SplatTile.y, _SplatTile.z) * _SplatTile.w + texel) * _SplatSpacing;
+}
+
+bool SplatThread(uint2 id)
+{
+    return any((int)id.x > _SplatTile.w) || any((int)id.y > _SplatTile.w);
+}
+
+// Whole-vector masks rather than slot indexing, which the compiler can't do inside loops.
+float4 FirstOf(float4 mask)
+{
+    return mask * float4(1.0, 1.0 - mask.x, (1.0 - mask.x) * (1.0 - mask.y), (1.0 - mask.x) * (1.0 - mask.y) * (1.0 - mask.z));
+}
+
+void PaintSlots(inout float4 index, inout float4 weight, float layer, float opacity)
+{
+    opacity = saturate(opacity);
+    if (opacity <= 0.0) return;
+    weight *= 1.0 - opacity;
+    float4 slot = FirstOf((float4)(index == layer) * (float4)(weight > 0.0));
+    if (dot(slot, 1.0) <= 0.0)
+    {
+        float weakest = min(min(weight.x, weight.y), min(weight.z, weight.w));
+        slot = FirstOf((float4)(weight == weakest));
+        index = lerp(index, layer, slot);
+        weight *= 1.0 - slot;
+    }
+    weight += slot * opacity;
+}
+
+void PaintLayer(int2 texel, float layer, float opacity)
+{
+    opacity = saturate(opacity);
+    if (opacity <= 0.0) return;
+    float4 index = _SplatIndex[texel];
+    float4 weight = _SplatWeight[texel];
+    PaintSlots(index, weight, layer, opacity);
+    _SplatIndex[texel] = index;
+    _SplatWeight[texel] = weight;
+}
+
+float SlopeAt(float2 p, float step)
+{
+    float dx = (HeightAt(p + float2(step, 0)) - HeightAt(p - float2(step, 0))) / (2.0 * step);
+    float dz = (HeightAt(p + float2(0, step)) - HeightAt(p - float2(0, step))) / (2.0 * step);
+    return degrees(atan(length(float2(dx, dz))));
+}
+
+// A mask evaluated on the final heights (StrataEval.hlsl's MaskWeight reads the region being built instead).
+float FinalMask(float2 p, float height)
+{
+    float weight = 1.0;
+    if (_MaskHeight.x > 0.5)
+    {
+        float falloff = max(_MaskHeight.w, 1e-3);
+        weight *= saturate((height - _MaskHeight.y) / falloff + 1.0) * saturate((_MaskHeight.z - height) / falloff + 1.0);
+    }
+    if (_MaskSlope.x > 0.5)
+    {
+        float slope = SlopeAt(p, _Grid.z);
+        float falloff = max(_MaskSlope.w, 1e-3);
+        weight *= saturate((slope - _MaskSlope.y) / falloff + 1.0) * saturate((_MaskSlope.z - slope) / falloff + 1.0);
+    }
+    return weight;
+}
+
+float RangeWeight(float4 range, float value)
+{
+    if (range.x < 0.5) return 1.0;
+    float falloff = max(range.w, 1e-4);
+    return saturate((value - range.y) / falloff + 1.0) * saturate((range.z - value) / falloff + 1.0);
+}
+
+float SplatHash(float2 p)
+{
+    uint2 v = asuint((int2)p) * uint2(1597334677u, 3812015801u);
+    return ((v.x ^ v.y) * 1597334677u >> 8) / 16777215.0;
+}
+
+float SplatNoise(float2 p)
+{
+    float2 i = floor(p), f = frac(p);
+    f = f * f * (3.0 - 2.0 * f);
+    return lerp(lerp(SplatHash(i), SplatHash(i + float2(1, 0)), f.x), lerp(SplatHash(i + float2(0, 1)), SplatHash(i + float2(1, 1)), f.x), f.y);
+}
+
+[numthreads(8, 8, 1)]
+void SplatInit(uint3 id : SV_DispatchThreadID)
+{
+    if (SplatThread(id.xy)) return;
+    _SplatIndex[id.xy] = 0.0;
+    _SplatWeight[id.xy] = float4(1, 0, 0, 0);
+}
+
+// 6 float4s per layer: (enabled, opacity, 1 / noise scale, noise amount), height, slope, curvature, moisture ranges
+StructuredBuffer<float4> _Rules;
+int _LayerCount;
+float _CurvatureRadius;
+
+[numthreads(8, 8, 1)]
+void SplatRules(uint3 id : SV_DispatchThreadID)
+{
+    if (SplatThread(id.xy)) return;
+    float2 p = TexelPosition((int2)id.xy);
+    float height = HeightAt(p);
+    float slope = SlopeAt(p, _Grid.z);
+    float r = _CurvatureRadius;
+    float around = (HeightAt(p + float2(r, 0)) + HeightAt(p - float2(r, 0)) + HeightAt(p + float2(0, r)) + HeightAt(p - float2(0, r))) * 0.25;
+    float curvature = tanh((around - height) / r * 2.0);
+    float moisture = MoistureAt(p);
+
+    float4 index = _SplatIndex[id.xy];
+    float4 slots = _SplatWeight[id.xy];
+    for (int layer = 1; layer < _LayerCount; layer++)
+    {
+        float4 head = _Rules[layer * 6];
+        if (head.x < 0.5) continue;
+        float weight = head.y * RangeWeight(_Rules[layer * 6 + 1], height) * RangeWeight(_Rules[layer * 6 + 2], slope) *
+                       RangeWeight(_Rules[layer * 6 + 3], curvature) * RangeWeight(_Rules[layer * 6 + 4], moisture);
+        if (weight <= 0.0) continue;
+        if (head.w > 0.0)
+        {
+            float n = SplatNoise(p * head.z + layer * 17.3) * 0.65 + SplatNoise(p * head.z * 2.7 + layer * 5.1) * 0.35;
+            weight = saturate(weight + (n - 0.5) * 2.0 * head.w);
+        }
+        PaintSlots(index, slots, layer, weight);
+    }
+    _SplatIndex[id.xy] = index;
+    _SplatWeight[id.xy] = slots;
+}
+
+// Rock strata ----------------------------------------------------------------------------------------------------------
+// Each texel keeps the strongest strata over it: (strength, definition index). Strength is the footprint times how far
+// the broad slope (over a few metres, so the baked ledges don't break it up) is into the strata's slope range.
+RWTexture2D<float2> _RockState;
+RWTexture2DArray<float2> _OutStrata;
+float4 _StrataSlope;    // start, full (degrees), definition index, unbounded
+
+float StrataSteepness(float2 p)
+{
+    float broad = SlopeAt(p, max(_SplatSpacing * 1.5, 3.0));
+    return smoothstep(_StrataSlope.x, _StrataSlope.y, broad);
+}
+
+float StrataFootprint(float2 p)
+{
+    return _StrataSlope.w > 0.5 ? 1.0 : FootprintWeight(FootprintUV(p));
+}
+
+[numthreads(8, 8, 1)]
+void RockInit(uint3 id : SV_DispatchThreadID)
+{
+    if (SplatThread(id.xy)) return;
+    _RockState[id.xy] = 0.0;
+}
+
+[numthreads(8, 8, 1)]
+void RockStrataMap(uint3 id : SV_DispatchThreadID)
+{
+    if (SplatThread(id.xy)) return;
+    float2 p = TexelPosition((int2)id.xy);
+    float footprint = StrataFootprint(p);
+    if (footprint <= 0.0) return;
+    float strength = footprint * StrataSteepness(p) * _Strength * FinalMask(p, HeightAt(p));
+    float2 current = _RockState[id.xy];
+    if (strength > current.x) _RockState[id.xy] = float2(strength, _StrataSlope.z);
+}
+
+[numthreads(8, 8, 1)]
+void RockWrite(uint3 id : SV_DispatchThreadID)
+{
+    if (SplatThread(id.xy)) return;
+    float2 state = _RockState[id.xy];
+    _OutStrata[uint3(id.xy, _SplatTile.x)] = float2(state.x, state.y / 255.0);
+}
+
+// PaintFeature: one feature's influence, painted with its layer. _PaintKind: 0 texture stamp, 1 noise stamp, 2 spline,
+// 3 filter footprint, 4 filter deposition, 5 filter erosion, 6 rock strata ledges (locally flat on broadly steep ground),
+// 7 tree scatter (its forest's density).
+int _PaintKind;
+float4 _Paint;          // layer, strength, width scale, sensitivity
+Texture2D<float4> _StampTexture;
+StructuredBuffer<float> _PaintCurve;   // 64 samples: feature weight to paint opacity
+float _Unbounded;
+StructuredBuffer<float4> _SplinePositions;
+StructuredBuffer<float4> _SplineShapes;
+int _SplineCount;
+Texture2D<float> _Delta;
+int4 _DeltaArea;        // world sample origin xy, size zw
+
+float SplineInfluence(float2 p)
+{
+    float best = 1e20;
+    int segment = -1;
+    float along = 0.0;
+    for (int i = 0; i < _SplineCount - 1; i++)
+    {
+        float4 shape = _SplineShapes[i];
+        if (shape.w < 0.5) continue;
+        float2 a = _SplinePositions[i].xz;
+        float2 b = _SplinePositions[i + 1].xz;
+        float reach = max(shape.x * 0.5 + shape.y, _SplineShapes[i + 1].x * 0.5 + _SplineShapes[i + 1].y) * _Paint.z;
+        if (any(p < min(a, b) - reach) || any(p > max(a, b) + reach)) continue;
+        float2 ab = b - a;
+        float t = saturate(dot(p - a, ab) / max(dot(ab, ab), 1e-6));
+        float d = length(p - (a + ab * t));
+        if (d < best) { best = d; segment = i; along = t; }
+    }
+    if (segment < 0) return 0.0;
+    float4 shape = lerp(_SplineShapes[segment], _SplineShapes[segment + 1], along);
+    float halfWidth = shape.x * 0.5 * _Paint.z;
+    float falloff = max(shape.y * _Paint.z, 1e-3);
+    if (best > halfWidth + falloff) return 0.0;
+    return (best <= halfWidth ? 1.0 : SampleCurve(_Profile, (best - halfWidth) / falloff)) * shape.z;
+}
+
+float DeltaAt(float2 p)
+{
+    float2 sample = (p - _Grid.xy) / _Grid.z - _DeltaArea.xy;
+    if (any(sample < 0.0) || any(sample > (float2)(_DeltaArea.zw - 1))) return 0.0;
+    int2 i = min((int2)floor(sample), _DeltaArea.zw - 2);
+    float2 f = sample - i;
+    return lerp(lerp(_Delta[i], _Delta[i + int2(1, 0)], f.x), lerp(_Delta[i + int2(0, 1)], _Delta[i + int2(1, 1)], f.x), f.y);
+}
+
+// Forests -------------------------------------------------------------------------------------------------------------
+float4 _Forest;             // density, 1 / noise scale, noise amount, seed
+float4 _ForestHeight;       // ranges, as StrataRange.Packed
+float4 _ForestSlope;
+float4 _ForestMoisture;
+float4 _ForestLayerInfo;    // layer count, sensitivity
+StructuredBuffer<float4> _ForestLayers;     // palette index, avoid
+
+// The weight of a palette layer in the splats being built at a texel.
+float LayerWeight(int2 texel, float layer)
+{
+    float4 index = _SplatIndex[texel];
+    float4 weight = _SplatWeight[texel];
+    return dot(weight * (float4)(index == layer), 1.0) / max(dot(weight, 1.0), 1e-5);
+}
+
+// The current forest's density at a texel from its rule (before any footprint).
+float ForestDensity(float2 p, int2 texel)
+{
+    float height = HeightAt(p);
+    float density = _Forest.x * RangeWeight(_ForestHeight, height) * RangeWeight(_ForestSlope, SlopeAt(p, _Grid.z)) *
+                    RangeWeight(_ForestMoisture, MoistureAt(p));
+    if (density <= 0.0) return 0.0;
+    float grow = 0.0, avoid = 0.0;
+    bool anyGrow = false;
+    for (int i = 0; i < (int)_ForestLayerInfo.x; i++)
+    {
+        float4 gate = _ForestLayers[i];
+        float weight = LayerWeight(texel, gate.x);
+        if (gate.y > 0.5) avoid += weight;
+        else { grow += weight; anyGrow = true; }
+    }
+    float sensitivity = max(_ForestLayerInfo.y, 0.01);
+    if (anyGrow) density *= saturate(grow / sensitivity);
+    density *= saturate(1.0 - avoid / sensitivity);
+    if (_Forest.z > 0.0)
+    {
+        float2 q = p * _Forest.y + _Forest.w * 13.7;
+        float n = SplatNoise(q) * 0.65 + SplatNoise(q * 2.7 + 5.1) * 0.35;
+        density *= lerp(1.0, smoothstep(0.3, 0.7, n), _Forest.z);
+    }
+    return density;
+}
+
+// How strongly the current feature acts at a texel, before its strength and mask (for painting and tree effects).
+float FeatureInfluence(float2 p, int2 texel)
+{
+    if (_PaintKind == 2) return SplineInfluence(p);
+    if (_PaintKind == 6) return StrataFootprint(p) * StrataSteepness(p) * (1.0 - smoothstep(15.0, 30.0, SlopeAt(p, _Grid.z)));
+    float2 uv = FootprintUV(p);
+    float influence = _Unbounded > 0.5 ? 1.0 : FootprintWeight(uv);
+    if (influence <= 0.0) return 0.0;
+    if (_PaintKind == 0) influence *= saturate(_StampTexture.SampleLevel(sampler_linear_clamp, uv, 0).r * 4.0);
+    if (_PaintKind == 4) influence *= saturate(DeltaAt(p) / _Paint.w);
+    if (_PaintKind == 5) influence *= saturate(-DeltaAt(p) / _Paint.w);
+    if (_PaintKind == 7) influence *= ForestDensity(p, texel);
+    return influence;
+}
+
+[numthreads(8, 8, 1)]
+void PaintFeature(uint3 id : SV_DispatchThreadID)
+{
+    if (SplatThread(id.xy)) return;
+    float2 p = TexelPosition((int2)id.xy);
+    float influence = FeatureInfluence(p, (int2)id.xy);
+    if (influence <= 0.0) return;
+    influence *= _Strength * FinalMask(p, HeightAt(p));
+    PaintLayer((int2)id.xy, _Paint.x, SampleCurve(_PaintCurve, influence) * _Paint.y);
+}
+
+// Trees: one slice of _TreeState per forest, then one for what effects on every forest leave (for planted trees). A
+// Tree Scatter blends its forest's density in by its weight (and with Replace, takes its weight away from the other
+// forests); a tree effect multiplies one slice, or all and the last, by its density where it acts. TreeWrite stores
+// them as bytes, with moisture after them, for the CPU to place trees from.
+RWTexture2DArray<float> _TreeState;
+RWTexture2DArray<float> _TreeOut;
+int _TreeSlice;             // the forest to change, or -1 for all (effects)
+int _TreeSlices;
+float4 _TreeEffect;         // density multiplier, replace (scatter)
+// grass (see GrassScatter), declared here as tree effects act on it too
+RWTexture2DArray<float> _GrassState;
+RWTexture2DArray<float> _GrassOut;
+int _GrassSlices;
+StructuredBuffer<float4> _GrassEntries;     // 4 per entry: (slice, weight), height, slope, moisture ranges
+int _GrassEntryCount;
+
+[numthreads(8, 8, 1)]
+void TreeInit(uint3 id : SV_DispatchThreadID)
+{
+    if (SplatThread(id.xy)) return;
+    for (int i = 0; i < _TreeSlices; i++) _TreeState[uint3(id.xy, i)] = 0.0;
+    _TreeState[uint3(id.xy, _TreeSlices)] = 1.0;
+}
+
+[numthreads(8, 8, 1)]
+void TreeScatter(uint3 id : SV_DispatchThreadID)
+{
+    if (SplatThread(id.xy)) return;
+    float2 p = TexelPosition((int2)id.xy);
+    float weight = (_Unbounded > 0.5 ? 1.0 : FootprintWeight(FootprintUV(p)));
+    if (weight <= 0.0) return;
+    weight *= _Strength * FinalMask(p, HeightAt(p));
+    if (weight <= 0.0) return;
+    uint3 target = uint3(id.xy, _TreeSlice);
+    _TreeState[target] = lerp(_TreeState[target], ForestDensity(p, (int2)id.xy), weight);
+    if (_TreeEffect.y > 0.5)
+        for (int i = 0; i < _TreeSlices; i++)
+            if (i != _TreeSlice) _TreeState[uint3(id.xy, i)] *= 1.0 - weight;
+}
+
+[numthreads(8, 8, 1)]
+void TreeEffect(uint3 id : SV_DispatchThreadID)
+{
+    if (SplatThread(id.xy)) return;
+    float2 p = TexelPosition((int2)id.xy);
+    float influence = FeatureInfluence(p, (int2)id.xy);
+    if (influence <= 0.0) return;
+    influence *= _Strength * FinalMask(p, HeightAt(p));
+    float multiplier = lerp(1.0, _TreeEffect.x, saturate(influence));
+    for (int i = 0; i < _TreeSlices; i++)
+        if (_TreeSlice < 0 || i == _TreeSlice) _TreeState[uint3(id.xy, i)] *= multiplier;
+    if (_TreeSlice < 0)
+    {
+        _TreeState[uint3(id.xy, _TreeSlices)] *= multiplier;
+        for (int g = 0; g < _GrassSlices; g++) _GrassState[uint3(id.xy, g)] *= multiplier;
+    }
+}
+
+// Grass: one slice of _GrassState per grass prototype. A Grass Scatter works out its meadow's density from the same
+// rule inputs as a forest (the _Forest constants), splits it between its entries by their weights and own ranges, and
+// blends each into its prototype's slice by its weight (with Replace, first taking its weight from every slice). Tree
+// effects on every forest act on these slices too (TreeEffect with _GrassSlices). GrassWrite stores them straight
+// into the world's grass density array.
+
+[numthreads(8, 8, 1)]
+void GrassInit(uint3 id : SV_DispatchThreadID)
+{
+    if (SplatThread(id.xy)) return;
+    for (int i = 0; i < _GrassSlices; i++) _GrassState[uint3(id.xy, i)] = 0.0;
+}
+
+[numthreads(8, 8, 1)]
+void GrassScatter(uint3 id : SV_DispatchThreadID)
+{
+    if (SplatThread(id.xy)) return;
+    float2 p = TexelPosition((int2)id.xy);
+    float weight = (_Unbounded > 0.5 ? 1.0 : FootprintWeight(FootprintUV(p)));
+    if (weight <= 0.0) return;
+    float height = HeightAt(p);
+    weight *= _Strength * FinalMask(p, height);
+    if (weight <= 0.0) return;
+    if (_TreeEffect.y > 0.5)
+        for (int i = 0; i < _GrassSlices; i++) _GrassState[uint3(id.xy, i)] *= 1.0 - weight;
+    float density = ForestDensity(p, (int2)id.xy);
+    float slope = SlopeAt(p, _Grid.z);
+    float moisture = MoistureAt(p);
+    float total = 0.0;
+    for (int e = 0; e < _GrassEntryCount; e++)
+        total += _GrassEntries[e * 4].y * RangeWeight(_GrassEntries[e * 4 + 1], height) * RangeWeight(_GrassEntries[e * 4 + 2], slope) *
+                 RangeWeight(_GrassEntries[e * 4 + 3], moisture);
+    for (int k = 0; k < _GrassEntryCount; k++)
+    {
+        float own = _GrassEntries[k * 4].y * RangeWeight(_GrassEntries[k * 4 + 1], height) * RangeWeight(_GrassEntries[k * 4 + 2], slope) *
+                    RangeWeight(_GrassEntries[k * 4 + 3], moisture);
+        uint3 target = uint3(id.xy, (uint)_GrassEntries[k * 4].x);
+        _GrassState[target] = lerp(_GrassState[target], total > 0.0 ? density * own / total : 0.0, weight);
+    }
+}
+
+[numthreads(8, 8, 1)]
+void GrassWrite(uint3 id : SV_DispatchThreadID)
+{
+    if (SplatThread(id.xy)) return;
+    for (int i = 0; i < _GrassSlices; i++) _GrassOut[uint3(id.xy, _SplatTile.x * _GrassSlices + i)] = saturate(_GrassState[uint3(id.xy, i)]);
+}
+
+[numthreads(8, 8, 1)]
+void TreeWrite(uint3 id : SV_DispatchThreadID)
+{
+    if (SplatThread(id.xy)) return;
+    for (int i = 0; i <= _TreeSlices; i++) _TreeOut[uint3(id.xy, i)] = saturate(_TreeState[uint3(id.xy, i)]);
+    _TreeOut[uint3(id.xy, _TreeSlices + 1)] = MoistureAt(TexelPosition((int2)id.xy));
+}
+
+// SplatWrite: normalized weights and indices into the world's splat tile arrays.
+RWTexture2DArray<float4> _OutIndices;
+RWTexture2DArray<float4> _OutWeights;
+
+[numthreads(8, 8, 1)]
+void SplatWrite(uint3 id : SV_DispatchThreadID)
+{
+    if (SplatThread(id.xy)) return;
+    float4 weight = _SplatWeight[id.xy];
+    weight /= max(dot(weight, 1.0), 1e-5);
+    _OutIndices[uint3(id.xy, _SplatTile.x)] = _SplatIndex[id.xy] / 255.0;
+    _OutWeights[uint3(id.xy, _SplatTile.x)] = weight;
+}

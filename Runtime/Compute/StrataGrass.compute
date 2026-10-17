@@ -1,0 +1,164 @@
+// Strata's grass, generated around one camera each frame. Candidate spots lie on a world-anchored jittered grid as fine
+// as the densest grass prototype allows; each keeps itself with the chance of the total grass density there (from the
+// world's per-tile density maps), picks a prototype in proportion to their densities, thins out over the last third of
+// that prototype's range, and if it is inside the camera's frustum appends one instance (base position, and yaw, scale
+// and lean packed as Strata/Tree reads them) to the prototype's region of the instance buffer, counting it in the
+// prototype's indirect draw arguments. GrassFinish clamps the counts to the regions and copies them to every submesh.
+#pragma kernel GrassReset
+#pragma kernel GrassScatter
+#pragma kernel GrassFinish
+
+#define HEADER_BYTES 160
+#define LEAN_STEP 2.5
+
+Texture2DArray<float> _StrataHeights;
+Texture2D<float> _StrataFarHeights;
+StructuredBuffer<int> _StrataTileSlots;     // per tile: its slot, or -1 (no grass, far heights)
+float4 _StrataFar;                          // far height quads x, z
+Texture2DArray<float> _GrassMap;
+SamplerState sampler_linear_clamp;
+float4 _StrataGrid;         // origin x, origin z, tile size, tiles x
+float4 _StrataHeightParams; // min height, height range, quads per tile, sample spacing
+float4 _GrassGrid;          // tiles z, splat quads per tile, types, args entries
+float4 _CameraPosition;     // xyz, the furthest range
+float4 _FrustumPlanes[6];
+float4 _Candidates;         // first cell x, first cell z, spacing, cells per side
+uint _Seed;
+// 3 float4s per type: (density per m², range, scale min, scale max), (align, lean, radius, first args entry),
+// (submesh count, region start, region capacity, unused)
+StructuredBuffer<float4> _Types;
+RWByteAddressBuffer _Instances;
+RWByteAddressBuffer _Args;      // 5 uints per entry: index count, instance count, start index, base vertex, start instance
+
+uint Hash(uint3 v)
+{
+    v = v * 1664525u + 1013904223u;
+    v.x += v.y * v.z; v.y += v.z * v.x; v.z += v.x * v.y;
+    v ^= v >> 16u;
+    v.x += v.y * v.z; v.y += v.z * v.x; v.z += v.x * v.y;
+    return v.x ^ v.y ^ v.z;
+}
+
+float Unit(uint h)
+{
+    return (h >> 8) * (1.0 / 16777216.0);
+}
+
+// The slot of the tile holding a position (-1 if not resident), and the position within the tile (0..1).
+int TileSlice(float2 positionXZ, out float2 local)
+{
+    float2 tiles = float2(_StrataGrid.w, _GrassGrid.x);
+    float2 relative = (positionXZ - _StrataGrid.xy) / _StrataGrid.z;
+    float2 tile = clamp(floor(relative), 0.0, tiles - 1.0);
+    local = clamp(relative - tile, 0.0, 1.0);
+    return _StrataTileSlots[(int)(tile.y * tiles.x + tile.x)];
+}
+
+float HeightAt(float2 positionXZ)
+{
+    float2 local;
+    int slice = TileSlice(positionXZ, local);
+    if (slice < 0)
+    {
+        float2 world = saturate((positionXZ - _StrataGrid.xy) / (float2(_StrataGrid.w, _GrassGrid.x) * _StrataGrid.z));
+        return _StrataHeightParams.x + _StrataFarHeights.SampleLevel(sampler_linear_clamp, (world * _StrataFar.xy + 0.5) / (_StrataFar.xy + 1.0), 0) * _StrataHeightParams.y;
+    }
+    float2 uv = (local * _StrataHeightParams.z + 0.5) / (_StrataHeightParams.z + 1.0);
+    return _StrataHeightParams.x + _StrataHeights.SampleLevel(sampler_linear_clamp, float3(uv, slice), 0) * _StrataHeightParams.y;
+}
+
+float DensityAt(float2 positionXZ, int type)
+{
+    float2 local;
+    int tile = TileSlice(positionXZ, local);
+    if (tile < 0) return 0.0;
+    float2 uv = (local * _GrassGrid.y + 0.5) / (_GrassGrid.y + 1.0);
+    return _GrassMap.SampleLevel(sampler_linear_clamp, float3(uv, tile * (int)_GrassGrid.z + type), 0);
+}
+
+bool InFrustum(float3 centre, float radius)
+{
+    for (int i = 0; i < 6; i++)
+        if (dot(_FrustumPlanes[i].xyz, centre) + _FrustumPlanes[i].w < -radius) return false;
+    return true;
+}
+
+[numthreads(64, 1, 1)]
+void GrassReset(uint3 id : SV_DispatchThreadID)
+{
+    if (id.x >= (uint)_GrassGrid.w) return;
+    _Args.Store(id.x * 20 + 4, 0u);
+}
+
+[numthreads(8, 8, 1)]
+void GrassScatter(uint3 id : SV_DispatchThreadID)
+{
+    if (any(id.xy >= (uint)_Candidates.w)) return;
+    int2 cell = int2(_Candidates.xy) + (int2)id.xy;
+    uint h0 = Hash(uint3(asuint(cell.x), asuint(cell.y), _Seed));
+    uint h1 = Hash(uint3(h0, 1u, 7u));
+    uint h2 = Hash(uint3(h0, 2u, 11u));
+    uint h3 = Hash(uint3(h0, 3u, 13u));
+    float spacing = _Candidates.z;
+    float2 p = ((float2)cell + float2(Unit(h0), Unit(h1))) * spacing;
+    float distance = length(p - _CameraPosition.xz);
+    if (distance > _CameraPosition.w) return;
+    float2 worldMin = _StrataGrid.xy, worldMax = _StrataGrid.xy + float2(_StrataGrid.w, _GrassGrid.x) * _StrataGrid.z;
+    if (any(p < worldMin) || any(p > worldMax)) return;
+
+    int types = (int)_GrassGrid.z;
+    float densities[8];
+    float total = 0.0;
+    for (int t = 0; t < 8; t++)
+    {
+        densities[t] = t < types ? DensityAt(p, t) * _Types[t * 3].x : 0.0;
+        total += densities[t];
+    }
+    // the candidate grid holds one spot per spacing², the most any prototype asks for
+    if (Unit(h2) * (1.0 / (spacing * spacing)) >= total) return;
+    float pick = Unit(h3) * total;
+    int type = 0;
+    for (int k = 0; k < types; k++)
+    {
+        type = k;
+        pick -= densities[k];
+        if (pick < 0.0) break;
+    }
+
+    float4 a = _Types[type * 3], b = _Types[type * 3 + 1], c = _Types[type * 3 + 2];
+    float fade = saturate((a.y - distance) / (a.y / 3.0));
+    uint h4 = Hash(uint3(h0, 4u, 17u));
+    if (Unit(h4) >= fade) return;
+
+    float height = HeightAt(p);
+    float scale = lerp(a.z, a.w, Unit(Hash(uint3(h0, 5u, 19u)))) * lerp(0.6, 1.0, fade);
+    if (!InFrustum(float3(p.x, height + b.z * scale, p.y), b.z * scale + 0.5)) return;
+
+    float step = _StrataHeightParams.w;
+    float2 gradient = float2(HeightAt(p + float2(step, 0)) - HeightAt(p - float2(step, 0)),
+                             HeightAt(p + float2(0, step)) - HeightAt(p - float2(0, step))) / (2.0 * step);
+    uint h6 = Hash(uint3(h0, 6u, 23u));
+    float angle = Unit(h6) * 6.2831853;
+    float2 lean = float2(cos(angle), sin(angle)) * Unit(Hash(uint3(h0, 7u, 29u))) * b.y;
+    lean += b.x * degrees(float2(atan(-gradient.y), atan(gradient.x)));
+    int2 leanSteps = (int2)clamp(round(lean / LEAN_STEP), -8.0, 7.0);
+    uint yawBits = h6 >> 24;
+    uint scaleBits = (uint)clamp(round(scale * 64.0), 1.0, 255.0);
+    uint packed = yawBits | scaleBits << 8 | (uint)(leanSteps.x & 0xf) << 16 | (uint)(leanSteps.y & 0xf) << 20;
+
+    uint entry = (uint)b.w;
+    uint index;
+    _Args.InterlockedAdd(entry * 20 + 4, 1u, index);
+    if (index >= (uint)c.z) return;
+    _Instances.Store4(HEADER_BYTES + ((uint)c.y + index) * 16, asuint(float4(p.x, height, p.y, (float)packed)));
+}
+
+[numthreads(8, 1, 1)]
+void GrassFinish(uint3 id : SV_DispatchThreadID)
+{
+    if (id.x >= (uint)_GrassGrid.z) return;
+    float4 b = _Types[id.x * 3 + 1], c = _Types[id.x * 3 + 2];
+    uint first = (uint)b.w;
+    uint count = min(_Args.Load(first * 20 + 4), (uint)c.z);
+    for (uint s = 0; s < (uint)c.x; s++) _Args.Store((first + s) * 20 + 4, count);
+}

@@ -1,0 +1,272 @@
+// Strata's neighbourhood filters. A filter works on its own textures covering its "area" (its footprint plus apron,
+// within the region), copied out of the region; Apply then blends the filtered heights back into the region over the
+// footprint. Area textures use area-local coordinates; _Area.xy is the area's origin within the region.
+#pragma kernel BlurX
+#pragma kernel BlurZ
+#pragma kernel Terrace
+#pragma kernel ThermalOut
+#pragma kernel ThermalIn
+#pragma kernel PipeFlux
+#pragma kernel PipeWater
+#pragma kernel PipeErode
+#pragma kernel PipeTransport
+#pragma kernel Apply
+
+#include "StrataEval.hlsl"
+
+int4 _Area;             // origin within the region xy, size zw
+
+Texture2D<float> _In;
+RWTexture2D<float> _Out;
+
+bool AreaThread(uint2 id)
+{
+    return any((int2)id >= _Area.zw);
+}
+
+float InAt(int2 p)
+{
+    return _In[clamp(p, 0, _Area.zw - 1)];
+}
+
+// Gaussian blur, one axis per kernel.
+float4 _Blur;           // sigma (samples), half width (samples)
+
+float BlurAxis(int2 p, int2 axis)
+{
+    float sigma = _Blur.x;
+    int half = (int)_Blur.y;
+    float sum = 0.0, norm = 0.0;
+    for (int k = -half; k <= half; k++)
+    {
+        float w = exp(-(k * k) / (2.0 * sigma * sigma));
+        sum += InAt(p + axis * k) * w;
+        norm += w;
+    }
+    return sum / norm;
+}
+
+[numthreads(8, 8, 1)]
+void BlurX(uint3 id : SV_DispatchThreadID)
+{
+    if (AreaThread(id.xy)) return;
+    _Out[id.xy] = BlurAxis((int2)id.xy, int2(1, 0));
+}
+
+[numthreads(8, 8, 1)]
+void BlurZ(uint3 id : SV_DispatchThreadID)
+{
+    if (AreaThread(id.xy)) return;
+    _Out[id.xy] = BlurAxis((int2)id.xy, int2(0, 1));
+}
+
+// Terrace: flats over the first `sharpness` of each step, then a smooth riser.
+float4 _Terrace;        // step height, sharpness
+
+[numthreads(8, 8, 1)]
+void Terrace(uint3 id : SV_DispatchThreadID)
+{
+    if (AreaThread(id.xy)) return;
+    float k = _In[id.xy] / _Terrace.x;
+    float f = frac(k);
+    float s = min(_Terrace.y, 0.98);
+    _Out[id.xy] = (floor(k) + smoothstep(s, 1.0, f)) * _Terrace.x;
+}
+
+// Thermal erosion: each cell sends part of its excess over the talus slope to its lower neighbours, in proportion to
+// how far each is below the slope. Out stores (total excess, amount sent); In gathers from the neighbours.
+static const int2 Neighbours[8] = { int2(-1, 0), int2(1, 0), int2(0, -1), int2(0, 1), int2(-1, -1), int2(1, -1), int2(-1, 1), int2(1, 1) };
+static const float Distances[8] = { 1, 1, 1, 1, 1.41421356, 1.41421356, 1.41421356, 1.41421356 };
+
+float4 _Thermal;        // talus height difference per sample, rate
+RWTexture2D<float2> _Transfer;
+Texture2D<float2> _TransferIn;
+
+bool InArea(int2 p)
+{
+    return all(p >= 0) && all(p < _Area.zw);
+}
+
+[numthreads(8, 8, 1)]
+void ThermalOut(uint3 id : SV_DispatchThreadID)
+{
+    if (AreaThread(id.xy)) return;
+    int2 p = (int2)id.xy;
+    float h = _In[p];
+    float total = 0.0, largest = 0.0;
+    for (int n = 0; n < 8; n++)
+    {
+        int2 q = p + Neighbours[n];
+        if (!InArea(q)) continue;
+        float excess = max(0.0, h - _In[q] - _Thermal.x * Distances[n]);
+        total += excess;
+        largest = max(largest, excess);
+    }
+    _Transfer[p] = float2(total, largest * 0.5 * _Thermal.y);
+}
+
+[numthreads(8, 8, 1)]
+void ThermalIn(uint3 id : SV_DispatchThreadID)
+{
+    if (AreaThread(id.xy)) return;
+    int2 p = (int2)id.xy;
+    float h = _In[p];
+    float2 own = _TransferIn[p];
+    float result = h - (own.x > 0.0 ? own.y : 0.0);
+    for (int n = 0; n < 8; n++)
+    {
+        int2 q = p + Neighbours[n];
+        if (!InArea(q)) continue;
+        float2 theirs = _TransferIn[q];
+        float excess = max(0.0, _In[q] - h - _Thermal.x * Distances[n]);
+        if (theirs.x > 0.0) result += theirs.y * excess / theirs.x;
+    }
+    _Out[p] = result;
+}
+
+// Hydraulic erosion on virtual pipes (Mei, Decaudin and Hu 2007). Terrain and water heights flow through pipes to the
+// four neighbours; water speed and slope set how much sediment it can carry; sediment is carried along the velocity.
+// Water drains out over the area's edges; sediment and terrain stay inside.
+float4 _Pipe;           // time step, gravity, cell size, rain per iteration
+float4 _PipeErosion;    // capacity, erosion rate, deposition rate, evaporation
+Texture2D<float> _Terrain;
+Texture2D<float> _Water;
+Texture2D<float> _Sediment;
+Texture2D<float4> _FluxIn;
+Texture2D<float2> _VelocityIn;
+RWTexture2D<float4> _Flux;          // to left, right, down (-z), up (+z)
+RWTexture2D<float> _WaterOut;
+RWTexture2D<float2> _Velocity;
+RWTexture2D<float> _TerrainOut;
+RWTexture2D<float> _SedimentOut;
+
+static const float MaxSpeed = 4.0;
+
+float SurfaceAt(int2 p)
+{
+    return _Terrain[p] + _Water[p];
+}
+
+[numthreads(8, 8, 1)]
+void PipeFlux(uint3 id : SV_DispatchThreadID)
+{
+    if (AreaThread(id.xy)) return;
+    int2 p = (int2)id.xy;
+    float dt = _Pipe.x, g = _Pipe.y, l = _Pipe.z;
+    float surface = SurfaceAt(p);
+    float4 flux = _FluxIn[p];
+    int2 offsets[4] = { int2(-1, 0), int2(1, 0), int2(0, -1), int2(0, 1) };
+    float4 result;
+    [unroll] for (int n = 0; n < 4; n++)
+    {
+        // past the area's edge the ground continues level and dry, so water drains out instead of pooling into lakes
+        int2 q = p + offsets[n];
+        float beyond = InArea(q) ? SurfaceAt(q) : _Terrain[p];
+        result[n] = max(0.0, flux[n] + dt * g * (surface - beyond) * l);
+    }
+    float total = result.x + result.y + result.z + result.w;
+    float water = _Water[p];
+    float scale = total > 0.0 ? min(1.0, water * l * l / (total * dt)) : 0.0;
+    _Flux[p] = result * scale;
+}
+
+[numthreads(8, 8, 1)]
+void PipeWater(uint3 id : SV_DispatchThreadID)
+{
+    if (AreaThread(id.xy)) return;
+    int2 p = (int2)id.xy;
+    float dt = _Pipe.x, l = _Pipe.z;
+    float4 own = _FluxIn[p];
+    float4 left = InArea(p + int2(-1, 0)) ? _FluxIn[p + int2(-1, 0)] : 0.0;
+    float4 right = InArea(p + int2(1, 0)) ? _FluxIn[p + int2(1, 0)] : 0.0;
+    float4 down = InArea(p + int2(0, -1)) ? _FluxIn[p + int2(0, -1)] : 0.0;
+    float4 up = InArea(p + int2(0, 1)) ? _FluxIn[p + int2(0, 1)] : 0.0;
+
+    float inflow = left.y + right.x + down.w + up.z;
+    float outflow = own.x + own.y + own.z + own.w;
+    float before = _Water[p];
+    float after = max(0.0, before + dt * (inflow - outflow) / (l * l));
+    _WaterOut[p] = after;
+
+    // very shallow water would divide out to huge speeds, so depth is floored and speed capped
+    float depth = max((before + after) * 0.5, 0.01);
+    float2 through = float2(left.y - own.x + own.y - right.x, down.w - own.z + own.w - up.z) * 0.5;
+    float2 velocity = through / (l * depth);
+    float speed = length(velocity);
+    _Velocity[p] = speed > MaxSpeed ? velocity * (MaxSpeed / speed) : velocity;
+}
+
+[numthreads(8, 8, 1)]
+void PipeErode(uint3 id : SV_DispatchThreadID)
+{
+    if (AreaThread(id.xy)) return;
+    int2 p = (int2)id.xy;
+    float l = _Pipe.z;
+    float h = _Terrain[p];
+    float dx = (_Terrain[clamp(p + int2(1, 0), 0, _Area.zw - 1)] - _Terrain[clamp(p - int2(1, 0), 0, _Area.zw - 1)]) / (2.0 * l);
+    float dz = (_Terrain[clamp(p + int2(0, 1), 0, _Area.zw - 1)] - _Terrain[clamp(p - int2(0, 1), 0, _Area.zw - 1)]) / (2.0 * l);
+    float gradient = length(float2(dx, dz));
+    float sinTilt = max(gradient / sqrt(1.0 + gradient * gradient), 0.05);
+    // capacity fades out in water shallower than 5 cm, so damp ground doesn't erode
+    float water = _Water[p];
+    float capacity = _PipeErosion.x * sinTilt * length(_VelocityIn[p]) * saturate(water / 0.05);
+    float sediment = _Sediment[p];
+    float dt = _Pipe.x;
+    // never dig below the lowest neighbour or build above the highest in one step, which grows single-cell spikes
+    float lowest = h, highest = h;
+    int2 offsets[4] = { int2(-1, 0), int2(1, 0), int2(0, -1), int2(0, 1) };
+    [unroll] for (int n = 0; n < 4; n++)
+    {
+        float neighbour = _Terrain[clamp(p + offsets[n], 0, _Area.zw - 1)];
+        lowest = min(lowest, neighbour);
+        highest = max(highest, neighbour);
+    }
+    if (capacity > sediment)
+    {
+        float taken = min(_PipeErosion.y * (capacity - sediment) * dt, h - lowest);
+        h -= taken;
+        sediment += taken;
+    }
+    else
+    {
+        float dropped = min(_PipeErosion.z * (sediment - capacity) * dt, highest - h);
+        h += dropped;
+        sediment -= dropped;
+    }
+    _TerrainOut[p] = h;
+    _SedimentOut[p] = sediment;
+}
+
+[numthreads(8, 8, 1)]
+void PipeTransport(uint3 id : SV_DispatchThreadID)
+{
+    if (AreaThread(id.xy)) return;
+    int2 p = (int2)id.xy;
+    // carry sediment along the velocity: take it from where this cell's water came from
+    float2 from = clamp((float2)p - _VelocityIn[p] * _Pipe.x / _Pipe.z, 0.0, (float2)(_Area.zw - 1));
+    int2 i = (int2)floor(from);
+    float2 f = from - i;
+    int2 j = min(i + 1, _Area.zw - 1);
+    float s = lerp(lerp(_Sediment[i], _Sediment[int2(j.x, i.y)], f.x), lerp(_Sediment[int2(i.x, j.y)], _Sediment[j], f.x), f.y);
+    _SedimentOut[p] = s;
+    // evaporate, then rain for the next iteration
+    _WaterOut[p] = _Water[p] * (1.0 - _PipeErosion.w) + _Pipe.w;
+}
+
+// Apply: blend the filtered area back into the region over the footprint, recording the change (for filters that
+// paint where they deposited or eroded) in _Delta, which covers the clip.
+RWTexture2D<float> _Heights;
+RWTexture2D<float> _Delta;
+float _Unbounded;
+
+[numthreads(8, 8, 1)]
+void Apply(uint3 id : SV_DispatchThreadID)
+{
+    int2 local;
+    if (ClipThread(id.xy, local)) return;
+    float footprint = _Unbounded > 0.5 ? 1.0 : FootprintWeight(FootprintUV(WorldPosition(local)));
+    float height = _Heights[local];
+    float result = footprint > 0.0 ? lerp(height, _In[local - _Area.xy], footprint * _Strength * MaskWeight(local, height)) : height;
+    _Heights[local] = result;
+    _Delta[id.xy] = result - height;
+}
