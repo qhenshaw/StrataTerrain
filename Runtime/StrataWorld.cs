@@ -15,6 +15,14 @@ namespace Strata
     public class StrataWorld : MonoBehaviour
     {
         private static readonly int CameraPositionId = Shader.PropertyToID("_StrataCameraPosition");
+        private static readonly int GroundSlotsId = Shader.PropertyToID("_StrataGroundSlots");
+        private static readonly int GroundColoursId = Shader.PropertyToID("_StrataGroundColours");
+        private static readonly int GroundIndicesId = Shader.PropertyToID("_StrataGroundIndices");
+        private static readonly int GroundWeightsId = Shader.PropertyToID("_StrataGroundWeights");
+        private static readonly int GroundFarIndicesId = Shader.PropertyToID("_StrataGroundFarIndices");
+        private static readonly int GroundFarWeightsId = Shader.PropertyToID("_StrataGroundFarWeights");
+        private static readonly int GroundGridId = Shader.PropertyToID("_StrataGroundGrid");
+        private static readonly int GroundParamsId = Shader.PropertyToID("_StrataGroundParams");
         private static readonly List<StrataWorld> s_active = new();
 
         [SerializeField] private StrataWorldSettings _settings;
@@ -183,6 +191,23 @@ namespace Strata
             GrassRenderer.SetPrototypes(GrassPrototypes, Grass);
         }
 
+        // The globals StrataGround.hlsl reads (for grass tinted by the ground); false if this world has nothing to show.
+        private bool SetGroundGlobals()
+        {
+            if (Heightfield == null || Splatmap == null || PaletteTextures == null) return false;
+            StrataGrid grid = Heightfield.Grid;
+            Unity.Mathematics.int2 far = StrataHeights.FarSplatSamples(grid) - 1;
+            Shader.SetGlobalBuffer(GroundSlotsId, Heightfield.TileSlotBuffer);
+            Shader.SetGlobalBuffer(GroundColoursId, PaletteTextures.LayerColours);
+            Shader.SetGlobalTexture(GroundIndicesId, Splatmap.Indices);
+            Shader.SetGlobalTexture(GroundWeightsId, Splatmap.Weights);
+            Shader.SetGlobalTexture(GroundFarIndicesId, Splatmap.FarIndices);
+            Shader.SetGlobalTexture(GroundFarWeightsId, Splatmap.FarWeights);
+            Shader.SetGlobalVector(GroundGridId, new Vector4(grid.Origin.x, grid.Origin.y, grid.TileSize, grid.TilesX));
+            Shader.SetGlobalVector(GroundParamsId, new Vector4(grid.TilesZ, grid.SplatResolution, far.x, far.y));
+            return true;
+        }
+
         // Recomputes where one tile's detail patches go, from its strata map (read back from the GPU).
         public void UpdateStrataLeaves(int tile, Unity.Collections.NativeArray<ushort> strataMap)
         {
@@ -262,6 +287,8 @@ namespace Strata
         private static void OnBeginCameraRendering(ScriptableRenderContext context, Camera camera)
         {
             Shader.SetGlobalVector(CameraPositionId, camera.transform.position);
+            for (int i = 0; i < s_active.Count; i++)
+                if (s_active[i].SetGroundGlobals()) break;
             foreach (StrataWorld world in s_active)
             {
                 world.Renderer?.Rebind();

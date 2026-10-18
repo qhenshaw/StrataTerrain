@@ -2,7 +2,9 @@
 // one tree: its base, yaw, scale and lean come from the per-instance _StrataTree, and its LOD crossfade from the packed
 // visible list. Albedo is the base map times the colour (times the vertex colour for vertex-coloured assets), with a
 // per-tree hue and brightness shift on foliage; foliage also lets light through. Wind moves vertices by their weight
-// (vertex alpha, or height up the tree). Lit with URP's PBR lighting. The two impostor bake passes render the tree
+// (vertex alpha, or height up the tree). Grass can take the colour of the terrain it stands on (from the world's splats):
+// Ground Multiply colours a greyscale texture by it (the scale is one over the texture's mean, so it ends up about as
+// bright as the ground), and Ground Tint blends the lower part of a coloured texture towards it. Lit with URP's PBR lighting. The two impostor bake passes render the tree
 // unlit into StrataTreeImpostor's frames (albedo and coverage; normals in the tree's own space and foliage).
 Shader "Strata/Tree"
 {
@@ -11,6 +13,7 @@ Shader "Strata/Tree"
         _BaseMap ("Albedo", 2D) = "white" {}
         _BaseColor ("Colour", Color) = (1, 1, 1, 1)
         [Toggle] _VertexColour ("Multiply By Vertex Colour (sRGB)", Float) = 0
+        [Toggle] _VertexOcclusion ("Vertex Colour Is Occlusion (SpeedTree)", Float) = 0
         [Toggle] _AlphaClip ("Alpha Clip", Float) = 0
         _Cutoff ("Alpha Cutoff", Range(0, 1)) = 0.5
         [Normal] _BumpMap ("Normal Map", 2D) = "bump" {}
@@ -23,6 +26,9 @@ Shader "Strata/Tree"
         _Translucency ("Translucency", Range(0, 1)) = 0.35
         _HueVariation ("Hue Variation", Range(0, 0.5)) = 0.2
         _BrightnessVariation ("Brightness Variation", Range(0, 0.5)) = 0.12
+        _GroundTint ("Ground Tint", Range(0, 1)) = 0
+        _GroundTintHeight ("Ground Tint Height (m)", Float) = 0.5
+        _GroundMultiply ("Ground Multiply (0 off, else scale)", Float) = 0
         [Header(Wind)]
         [Enum(Vertex Alpha, 0, Height, 1)] _WindSource ("Sway From", Float) = 0
         _WindHeight ("Sway Height (m)", Float) = 10
@@ -49,6 +55,7 @@ Shader "Strata/Tree"
             float4 _BaseMap_ST;
             float4 _BaseColor;
             float _VertexColour;
+            float _VertexOcclusion;
             float _AlphaClip;
             float _Cutoff;
             float _BumpScale;
@@ -59,6 +66,9 @@ Shader "Strata/Tree"
             float _Translucency;
             float _HueVariation;
             float _BrightnessVariation;
+            float _GroundTint;
+            float _GroundTintHeight;
+            float _GroundMultiply;
             float _WindSource;
             float _WindHeight;
             float _WindStrength;
@@ -68,6 +78,7 @@ Shader "Strata/Tree"
         CBUFFER_END
 
         #include "StrataTreeCommon.hlsl"
+        #include "StrataGround.hlsl"
 
         TEXTURE2D(_BaseMap);
         SAMPLER(sampler_BaseMap);
@@ -150,6 +161,7 @@ Shader "Strata/Tree"
                 nointerpolation float4 tree : TEXCOORD5;     // origin, foliage
                 nointerpolation float fade : TEXCOORD6;
                 float fogFactor : TEXCOORD7;
+                half4 ground : TEXCOORD8;       // ground colour, and how much of it
                 UNITY_VERTEX_INPUT_INSTANCE_ID
             };
 
@@ -168,6 +180,9 @@ Shader "Strata/Tree"
                 output.tree = float4(space.origin, Foliage(input));
                 output.fade = space.fade;
                 output.fogFactor = ComputeFogFactor(output.positionCS.z);
+                if (_GroundTint > 0.0 || _GroundMultiply > 0.0)
+                    output.ground = half4(StrataGroundColour(space.origin.xz),
+                                          _GroundTint * saturate(1.0 - input.positionOS.y / max(_GroundTintHeight, 0.01)));
                 return output;
             }
 
@@ -179,6 +194,8 @@ Shader "Strata/Tree"
                 half4 albedo = BaseAlbedo(input.uv, input.colour);
                 float foliage = input.tree.w;
                 albedo.rgb = StrataTreeTint(albedo.rgb, input.tree.xyz, foliage, _HueVariation, _BrightnessVariation);
+                if (_GroundMultiply > 0.0) albedo.rgb *= input.ground.rgb * _GroundMultiply;
+                albedo.rgb = lerp(albedo.rgb, input.ground.rgb, input.ground.a);
 
                 float3 normalWS = normalize(input.normalWS) * (frontFace ? 1.0 : -1.0);
                 if (_BumpScale > 0.0 && dot(input.tangentWS.xyz, input.tangentWS.xyz) > 1e-6)
@@ -207,7 +224,7 @@ Shader "Strata/Tree"
                 SurfaceData surfaceData = (SurfaceData)0;
                 surfaceData.albedo = albedo.rgb;
                 surfaceData.smoothness = _Smoothness;
-                surfaceData.occlusion = 1.0;
+                surfaceData.occlusion = _VertexOcclusion > 0.5 ? input.colour.r : 1.0;
                 surfaceData.normalTS = half3(0, 0, 1);
                 surfaceData.alpha = 1.0;
                 half4 colour = UniversalFragmentPBR(inputData, surfaceData);
@@ -380,8 +397,9 @@ Shader "Strata/Tree"
 
             float4 Frag(Varyings input) : SV_Target
             {
-                // the atlas is imported as sRGB
+                // the atlas is imported as sRGB; impostors get no self-shadowing, so the occlusion goes into their albedo
                 half3 albedo = BaseAlbedo(input.uv, input.colour).rgb;
+                if (_VertexOcclusion > 0.5) albedo *= input.colour.r;
                 #if !defined(UNITY_COLORSPACE_GAMMA)
                     albedo = LinearToSRGB(albedo);
                 #endif

@@ -182,6 +182,11 @@ namespace Strata.Editor
                         Height = species.Height.Packed,
                         Slope = species.Slope.Packed,
                         Moisture = species.Moisture.Packed,
+                        Clumping = species.Clumping,
+                        ClumpSize = species.ClumpSize > 0f ? species.ClumpSize : species.Spacing * 3f,
+                        SpacingVariation = species.SpacingVariation,
+                        Patchiness = forest.Patchiness,
+                        PatchSize = forest.PatchSize,
                         Seed = math.hash(new int3(seed, forest.Seed, index))
                     });
                 }

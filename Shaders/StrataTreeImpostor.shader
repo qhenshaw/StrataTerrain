@@ -16,6 +16,7 @@ Shader "Strata/TreeImpostor"
         _Translucency ("Translucency", Range(0, 1)) = 0.35
         _HueVariation ("Hue Variation", Range(0, 0.5)) = 0.2
         _BrightnessVariation ("Brightness Variation", Range(0, 0.5)) = 0.12
+        _Brightness ("Brightness", Range(0.2, 1.5)) = 1
         [HideInInspector] _StrataTree ("Tree", Vector) = (0, 0, 0, 64)
     }
 
@@ -38,6 +39,7 @@ Shader "Strata/TreeImpostor"
             float _Translucency;
             float _HueVariation;
             float _BrightnessVariation;
+            float _Brightness;
         CBUFFER_END
 
         #include "StrataTreeCommon.hlsl"
@@ -150,7 +152,7 @@ Shader "Strata/TreeImpostor"
                 half4 packed = SAMPLE_TEXTURE2D(_Normals, sampler_Normals, input.uv);
                 float3 normalWS = normalize(StrataRotateY(packed.rgb * 2.0 - 1.0, input.sinCos));
                 float foliage = packed.a;
-                albedo.rgb = StrataTreeTint(albedo.rgb, input.origin, foliage, _HueVariation, _BrightnessVariation);
+                albedo.rgb = StrataTreeTint(albedo.rgb, input.origin, foliage, _HueVariation, _BrightnessVariation) * _Brightness;
 
                 InputData inputData = (InputData)0;
                 inputData.positionWS = input.positionWS;

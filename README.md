@@ -20,7 +20,10 @@ Non-destructive tiled terrain for Unity 6 URP (PC, DX12/Vulkan).
   their own height/slope/moisture ranges) under a forest rule (height, slope, moisture, terrain layers to grow on or
   avoid, noise for stands and clearings). The **Tree Scatter** feature places a forest over the world or a footprint
   (Replace swaps out the forests above it; its paint lays a forest floor by density), and every feature's tree effect
-  can thin or clear trees where it acts (roads, rivers) or plant a line along a spline.
+  can thin or clear trees where it acts (roads, rivers) or plant a line along a spline. SpeedTree and HDRP prefabs
+  convert too (billboard LODs dropped, vertex occlusion kept); prototypes with a MeshCollider (rocks) get mesh
+  colliders. Grass prototypes come from small prefabs (**Assets > Strata > Create Grass Prototypes**) and can take the
+  terrain's colour (greyscale textures are multiplied by it).
 - Grass: `StrataGrassPrototype` assets (a small mesh with a `Strata/Tree` material, clumps per square metre, range,
   variation) mixed by `StrataMeadow` assets and placed by the **Grass Scatter** feature; tree effects on every forest
   clear grass too. Density maps (up to 8 prototypes) are baked; the clumps themselves are generated on the GPU around

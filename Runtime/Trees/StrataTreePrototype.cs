@@ -4,9 +4,16 @@ using UnityEngine;
 namespace Strata
 {
     // One kind of tree (or bush) Strata can place: the mesh and Strata/Tree materials of each LOD and the distance it
-    // reaches, the impostor drawn beyond the last mesh LOD, shadow settings, and the trunk capsule used for collision.
+    // reaches, the impostor drawn beyond the last mesh LOD, shadow settings, and its collider: a trunk capsule, or for
+    // rocks and other solid shapes a mesh turned and scaled with each instance.
     // It is filled from a source LODGroup prefab by the prototype's inspector (Rebuild From Source, Bake Impostor);
     // the source prefab itself is never drawn. Distances are for a tree of scale 1 at a 60 degree field of view.
+    public enum StrataColliderKind
+    {
+        Capsule,
+        Mesh
+    }
+
     [CreateAssetMenu(menuName = "Strata/Tree Prototype", fileName = "StrataTreePrototype")]
     public class StrataTreePrototype : ScriptableObject
     {
@@ -33,14 +40,18 @@ namespace Strata
         [SerializeField, Min(1f)] private float _impostorDistance = 2000f;
         [Tooltip("The baked frames' bounding sphere in the tree's own space: centre and radius.")]
         [SerializeField] private Vector4 _impostorBounds = new(0f, 5f, 0f, 6f);
+        [Tooltip("Darkens or brightens the impostor to match the meshes, which shade themselves where impostors can't.")]
+        [SerializeField, Range(0.2f, 1.5f)] private float _impostorBrightness = 1f;
 
         [Header("Shadows")]
         [SerializeField] private bool _castShadows = true;
-        [Tooltip("Impostors cast shadows in the last cascade only.")]
+        [Tooltip("Impostors cast shadows too (flat cards facing the light).")]
         [SerializeField] private bool _impostorShadows = true;
 
         [Header("Collision")]
         [SerializeField] private bool _collider = true;
+        [SerializeField] private StrataColliderKind _colliderKind = StrataColliderKind.Capsule;
+        [SerializeField] private Mesh _colliderMesh;
         [SerializeField, Min(0.01f)] private float _colliderRadius = 0.3f;
         [SerializeField, Min(0.02f)] private float _colliderHeight = 4f;
 
@@ -57,9 +68,12 @@ namespace Strata
         public bool HasImpostor => _impostorMaterial != null;
         public float ImpostorDistance => _impostorDistance;
         public Vector4 ImpostorBounds => _impostorBounds;
+        public float ImpostorBrightness => _impostorBrightness;
         public bool CastShadows => _castShadows;
         public bool ImpostorShadows => _impostorShadows;
-        public bool HasCollider => _collider;
+        public bool HasCollider => _collider && (_colliderKind == StrataColliderKind.Capsule || _colliderMesh != null);
+        public StrataColliderKind ColliderKind => _colliderKind;
+        public Mesh ColliderMesh => _colliderMesh;
         public float ColliderRadius => _colliderRadius;
         public float ColliderHeight => _colliderHeight;
         public float Height => _height;
@@ -77,9 +91,18 @@ namespace Strata
             Version++;
         }
 
+        public void SetMeshCollider(Mesh mesh)
+        {
+            _collider = mesh != null;
+            _colliderKind = StrataColliderKind.Mesh;
+            _colliderMesh = mesh;
+            Version++;
+        }
+
         public void SetCollider(bool enabled, float radius, float height)
         {
             _collider = enabled;
+            _colliderKind = StrataColliderKind.Capsule;
             _colliderRadius = radius;
             _colliderHeight = height;
             Version++;
@@ -94,6 +117,7 @@ namespace Strata
 
         private void OnValidate()
         {
+            if (_impostorMaterial != null && _impostorMaterial.HasProperty("_Brightness")) _impostorMaterial.SetFloat("_Brightness", _impostorBrightness);
             if (_lods.Length > MaxLods) Array.Resize(ref _lods, MaxLods);
             for (int i = 1; i < _lods.Length; i++) _lods[i].Distance = Mathf.Max(_lods[i].Distance, _lods[i - 1].Distance + 1f);
             if (_lods.Length > 0) _impostorDistance = Mathf.Max(_impostorDistance, _lods[^1].Distance + 1f);

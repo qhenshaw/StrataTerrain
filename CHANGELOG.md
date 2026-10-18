@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.7.0
+- Realistic assets. The tree builder converts materials whose shader is missing (HDRP, SpeedTree) from their saved
+  properties, drops billboard LODs, reads alpha cutoffs from the HDRP and SpeedTree names, tells bark from foliage by
+  subsurface/thickness maps, gives every material of a prototype one wind (none without foliage), uses SpeedTree's
+  vertex colour as occlusion (baked into impostors too), and turns BoxColliders into trunk capsules and MeshColliders
+  into mesh colliders. Prototypes have an Impostor Brightness to match their meshes.
+- Mesh-collider prototypes (rocks): pooled MeshColliders turned and scaled like their instances.
+- Grass prototypes from prefabs (Assets > Strata > Create Grass Prototypes). Grass can take the terrain's colour: Ground
+  Multiply colours a greyscale texture by it, Ground Tint blends a coloured one's base into it.
+- Layers: MHER mask layout (metallic, height, emission, roughness) and DirectX normal maps.
+- Natural tree placement: random candidates (four per spacing cell) instead of a jittered grid, a per-tree room that
+  varies and shrinks inside groups, a clump field per species (Clumping, Clump Size) that gathers trees into groups
+  with gaps, and single-species stands per forest (Patchiness, Patch Size). Trees in group cores are a little bigger.
+- The live preview rebuilds a world that is still streamed when play mode has just ended.
+- Fixed trees standing in rows: tree placement hashed with math.hash, which is a plain weighted sum, so neighbouring
+  cells' random values stepped by a constant; it now uses an avalanching mix (lowbias32).
+- The palette inspector checks its textures without packing them on every repaint.
+- Fixed a band without tree shadows: impostors cast only into the last shadow cascade, but cascades split by view depth
+  while tree LODs go by distance, so from an elevated camera impostors stood over ground in the nearer cascades. They
+  now cast into every cascade that sees them.
+
 ## 0.6.0
 - Milestone 6: streaming. Bakes write the tile files and a far file (the whole world's heights every 8th sample, splats
   every 4th texel, and every CDLOD node's bounds) to StreamingAssets/Strata/<world>/; the world data points at that

@@ -21,6 +21,18 @@ namespace Strata
 
         public float Scale => ((Packed >> 8) & 0xff) * ScaleStep;
         public float Sink => (Packed >> 24) * SinkStep;
+        public float Yaw => (Packed & 0xff) * (360f / 256f);
+        public float2 Lean => new float2((int)(Packed << 12) >> 28, (int)(Packed << 8) >> 28) * LeanStep;
+
+        // How the instance is turned: yaw, then the lean about z and x (as StrataTreeCommon.hlsl builds it).
+        public UnityEngine.Quaternion Rotation
+        {
+            get
+            {
+                float2 lean = Lean;
+                return UnityEngine.Quaternion.Euler(lean.x, 0f, 0f) * UnityEngine.Quaternion.Euler(0f, 0f, lean.y) * UnityEngine.Quaternion.Euler(0f, Yaw, 0f);
+            }
+        }
         public uint GpuBits => Packed & 0xffffffu;
 
         public float2 Position(StrataGrid grid, int tile) =>

@@ -92,11 +92,14 @@ namespace Strata.Editor
 
         private static void Update()
         {
-            if (!Enabled || EditorApplication.isPlayingOrWillChangePlaymode) return;
+            // isPlayingOrWillChangePlaymode turns false as soon as play mode is asked to stop, while the play mode worlds
+            // (streamed, a slot per resident tile) are still about until Application.isPlaying follows
+            if (!Enabled || EditorApplication.isPlayingOrWillChangePlaymode || Application.isPlaying) return;
             foreach (StrataWorld world in StrataWorld.Active)
             {
                 if (world == null || world.Heightfield == null || world.Settings == null) continue;
-                if (!world.Settings.Grid.Equals(world.Heightfield.Grid))
+                // a world still holding streamed slots (in case one outlives play mode) is rebuilt with every tile resident
+                if (!world.Settings.Grid.Equals(world.Heightfield.Grid) || world.Heightfield.Streamed)
                 {
                     world.Rebuild();
                     if (world.Heightfield == null) continue;

@@ -52,8 +52,16 @@ namespace Strata
         };
     }
 
-    // One terrain material: albedo, an OpenGL-style normal map and a mask map (R metallic, G occlusion, B height,
-    // A smoothness), tiled every Tile Size metres, plus its automatic placement rule. Layers are listed in a
+    public enum StrataMaskLayout
+    {
+        // R metallic, G occlusion, B height, A smoothness (Unity's terrain and HDRP mask maps)
+        MetallicOcclusionHeightSmoothness,
+        // R metallic, G height, B emission (unused), A roughness
+        MetallicHeightEmissionRoughness
+    }
+
+    // One terrain material: albedo, a normal map (OpenGL-style, or DirectX with its green flipped) and a mask map in one
+    // of the StrataMaskLayout channel orders, tiled every Tile Size metres, plus its automatic placement rule. Layers are listed in a
     // StrataPalette; all of a palette's textures of one kind must share size and format so they can be packed into
     // texture arrays (the palette's inspector can fix the import settings).
     [CreateAssetMenu(menuName = "Strata/Layer", fileName = "StrataLayer")]
@@ -62,6 +70,9 @@ namespace Strata
         [SerializeField] private Texture2D _albedo;
         [SerializeField] private Texture2D _normal;
         [SerializeField] private Texture2D _mask;
+        [SerializeField] private StrataMaskLayout _maskLayout;
+        [Tooltip("The normal map's green channel points down (DirectX convention).")]
+        [SerializeField] private bool _directXNormal;
         [SerializeField, Min(0.1f)] private float _tileSize = 4f;
         [SerializeField] private Color _tint = Color.white;
         [SerializeField, Range(0f, 2f)] private float _normalStrength = 1f;
@@ -78,6 +89,8 @@ namespace Strata
         public Texture2D Albedo => _albedo;
         public Texture2D Normal => _normal;
         public Texture2D Mask => _mask;
+        public StrataMaskLayout MaskLayout => _maskLayout;
+        public bool DirectXNormal => _directXNormal;
         public float TileSize => _tileSize;
         public Color Tint => _tint;
         public float NormalStrength => _normalStrength;
@@ -95,6 +108,14 @@ namespace Strata
             _normal = normal;
             _mask = mask;
             _tileSize = tileSize;
+            Version++;
+        }
+
+        public void SetFormat(StrataMaskLayout maskLayout, bool directXNormal, Color tint)
+        {
+            _maskLayout = maskLayout;
+            _directXNormal = directXNormal;
+            _tint = tint;
             Version++;
         }
 

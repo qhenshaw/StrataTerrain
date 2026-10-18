@@ -16,7 +16,8 @@ namespace Strata
     // rewritten when its trees change. Per view, a Burst job walks the 64 m cells, frustum-culls them, and gives each
     // run of a prototype its LOD: whole runs at once when the cell lies within one LOD, otherwise tree by tree, with
     // trees in a crossfade band drawn by both LODs and their fade packed into the visible list. Beyond the last mesh
-    // LOD trees draw as impostor quads; in shadow views impostors only cast into the last cascade.
+    // LOD trees draw as impostor quads, which cast shadows into every cascade that sees them (cascades split by view depth
+    // while LODs go by distance, so from above, impostors stand over ground in the nearer cascades too).
     public sealed unsafe class StrataTreeRenderer : IDisposable
     {
         private const int HeaderBytes = 64;
@@ -342,7 +343,6 @@ namespace Strata
                 int bucketCount = Prototypes.Length * SlotCount * maskCount;
                 // x: visible index (with fade in the top byte), y: bucket
                 NativeList<int2> items = new(4096, Allocator.Temp);
-                int lastSplit = 1 << (SplitCount - 1);
 
                 for (int c = 0; c < Cells.Length; c++)
                 {
@@ -361,7 +361,7 @@ namespace Strata
                         Choose(prototype, far, out int farSlot, out float farFade, out _);
                         if (nearSlot == farSlot && nearSlot >= 0 && nearFade == 0f && farFade == 0f)
                         {
-                            int bucket = Bucket(run.Prototype, nearSlot, prototype, mask, lastSplit);
+                            int bucket = Bucket(run.Prototype, nearSlot, prototype, mask);
                             if (bucket < 0) continue;
                             for (int i = run.Start; i < run.Start + run.Count; i++) items.Add(new int2(i, bucket));
                             continue;
@@ -371,10 +371,10 @@ namespace Strata
                             float distance = math.distance(Instances[i].xyz, CameraPosition) * DistanceFactor;
                             Choose(prototype, distance, out int slot, out float fade, out bool both);
                             if (slot < 0) continue;
-                            int bucket = Bucket(run.Prototype, slot, prototype, mask, lastSplit);
+                            int bucket = Bucket(run.Prototype, slot, prototype, mask);
                             if (bucket >= 0) items.Add(new int2(Pack(i, fade), bucket));
                             if (!both) continue;
-                            bucket = Bucket(run.Prototype, slot + 1, prototype, mask, lastSplit);
+                            bucket = Bucket(run.Prototype, slot + 1, prototype, mask);
                             if (bucket >= 0) items.Add(new int2(Pack(i, -fade), bucket));
                         }
                     }
@@ -466,15 +466,11 @@ namespace Strata
                 }
             }
 
-            private int Bucket(int prototype, int slot, PrototypeCull p, int mask, int lastSplit)
+            private int Bucket(int prototype, int slot, PrototypeCull p, int mask)
             {
                 if (Shadow)
                 {
-                    if (slot == p.LodCount)
-                    {
-                        if (!p.ImpostorShadows) return -1;
-                        mask &= lastSplit;
-                    }
+                    if (slot == p.LodCount && !p.ImpostorShadows) return -1;
                     if (mask == 0) return -1;
                 }
                 if (Slots[prototype * SlotCount + slot].Count == 0) return -1;

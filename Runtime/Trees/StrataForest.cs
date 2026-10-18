@@ -14,6 +14,12 @@ namespace Strata
         [Tooltip("Typical distance between neighbouring trees of this species at full density, in metres. Trees of " +
                  "different species keep apart by the average of their spacings, times 0.7.")]
         [Min(0.25f)] public float Spacing = 6f;
+        [Tooltip("How much trees gather into groups with gaps between (0 even, 1 tight groups).")]
+        [Range(0f, 1f)] public float Clumping = 0.6f;
+        [Tooltip("Size of the groups and gaps, in metres (0: three times the spacing).")]
+        [Min(0f)] public float ClumpSize;
+        [Tooltip("How much the room each tree keeps varies from tree to tree.")]
+        [Range(0f, 1f)] public float SpacingVariation = 0.5f;
         [Tooltip("Uniform scale range.")]
         public Vector2 Scale = new(0.8f, 1.2f);
         [Tooltip("Random lean, in degrees.")]
@@ -54,6 +60,10 @@ namespace Strata
         [SerializeField, Min(1f)] private float _noiseScale = 120f;
         [SerializeField, Range(0f, 1f)] private float _noiseAmount = 0.5f;
         [SerializeField] private int _seed = 1;
+        [Tooltip("How much each species keeps to its own stands rather than mixing evenly with the others.")]
+        [SerializeField, Range(0f, 1f)] private float _patchiness = 0.7f;
+        [Tooltip("Size of the single-species stands, in metres.")]
+        [SerializeField, Min(5f)] private float _patchSize = 120f;
         [SerializeField] private List<StrataTreeSpecies> _species = new();
 
         public float Density => _density;
@@ -65,6 +75,8 @@ namespace Strata
         public float NoiseScale => _noiseScale;
         public float NoiseAmount => _noiseAmount;
         public int Seed => _seed;
+        public float Patchiness => _patchiness;
+        public float PatchSize => _patchSize;
         public IReadOnlyList<StrataTreeSpecies> Species => _species;
         private int _version;
 

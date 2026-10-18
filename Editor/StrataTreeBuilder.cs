@@ -6,13 +6,16 @@ using UnityEngine.Rendering;
 
 namespace Strata.Editor
 {
-    // Fills tree prototypes from their source prefabs. Rebuild reads the prefab's LODGroup (or its renderers as a single
-    // LOD): each LOD's mesh is used as it is when one untransformed renderer draws it, otherwise its renderers are
-    // combined into a mesh saved beside the prototype; every source material gets a Strata/Tree copy in a Materials
-    // folder beside the prototype (shared by prototypes using the same source); LOD distances come from the LODGroup's
-    // transitions at a 60 degree view, with the last mesh LOD reaching MeshDistance; the collider comes from a
-    // CapsuleCollider on the prefab (none if it has none, as for bushes). BakeImpostor renders LOD0 from Frames x Frames
-    // directions over the upper hemisphere into albedo and normal atlases and makes the Strata/TreeImpostor material.
+    // Fills tree and grass prototypes from their source prefabs. Rebuild reads the prefab's LODGroup (or its renderers as
+    // a single LOD), leaving out billboard LODs (Strata bakes its own impostor): each LOD's mesh is used as it is when one
+    // untransformed renderer draws it, otherwise its renderers are combined into a mesh saved beside the prototype; every
+    // source material gets a Strata/Tree copy in a Materials folder beside the prototype, read from the material's saved
+    // properties so materials whose shader is missing (HDRP, SpeedTree) still convert; LOD distances come from the
+    // LODGroup's transitions at a 60 degree view, with the last mesh LOD reaching MeshDistance; every material of a
+    // prototype sways together with one wind (none without foliage, as for rocks); the collider comes from a
+    // CapsuleCollider or BoxCollider (as a trunk capsule) or MeshCollider on the prefab. BakeImpostor renders LOD0 from
+    // Frames x Frames directions over the upper hemisphere into albedo and normal atlases and makes the
+    // Strata/TreeImpostor material.
     public static class StrataTreeBuilder
     {
         public const string TreeShader = "Strata/Tree";
@@ -58,7 +61,7 @@ namespace Strata.Editor
                 size = group.size;
                 foreach (LOD lod in group.GetLODs())
                 {
-                    if (lod.renderers.Length == 0) continue;
+                    if (lod.renderers.Length == 0 || System.Array.Exists(lod.renderers, IsBillboard)) continue;
                     lodRenderers.Add(lod.renderers);
                     transitions.Add(lod.screenRelativeTransitionHeight);
                 }
@@ -78,6 +81,7 @@ namespace Strata.Editor
                 (Mesh mesh, Material[] sources) = MeshOf(lodRenderers[l], source.transform, $"{folder}/{prototype.name} LOD{l}.asset");
                 Material[] materials = new Material[sources.Length];
                 for (int m = 0; m < sources.Length; m++) materials[m] = Convert(sources[m], materialFolder);
+                if (l == 0) size = Mathf.Max(size, mesh.bounds.size.y);
                 float distance = l == lods.Length - 1 || transitions[l] <= 0f ? MeshDistance : size / (ViewHeightFactor * transitions[l]);
                 distance = Mathf.Max(Mathf.Min(distance, MeshDistance - (lods.Length - 1 - l)), previous + 1f);
                 previous = distance;
@@ -87,19 +91,45 @@ namespace Strata.Editor
             Bounds bounds = lods.Length > 0 && lods[0].Mesh != null ? lods[0].Mesh.bounds : new Bounds(Vector3.zero, Vector3.one);
             float reach = Mathf.Max(Mathf.Max(Mathf.Abs(bounds.min.x), Mathf.Abs(bounds.max.x)), Mathf.Max(Mathf.Abs(bounds.min.z), Mathf.Abs(bounds.max.z)));
             prototype.SetLods(lods, Mathf.Max(bounds.max.y, 0.1f), Mathf.Max(reach, 0.1f));
+            List<Material> all = new();
+            foreach (StrataTreePrototype.Lod lod in lods) all.AddRange(lod.Materials);
+            bool swaying = SetWind(all, Mathf.Max(bounds.max.y, 0.1f), 0.015f);
+            bool occlusion = lods.Length > 0 && HasGreyVertexColours(lods[0].Mesh);
+            foreach (Material material in all)
+                if (material != null && material.GetFloat("_VertexColour") < 0.5f)
+                {
+                    material.SetFloat("_VertexOcclusion", occlusion ? 1f : 0f);
+                    EditorUtility.SetDirty(material);
+                }
 
-            CapsuleCollider capsule = source.GetComponentInChildren<CapsuleCollider>();
-            if (capsule != null)
+            string collider;
+            if (source.GetComponentInChildren<CapsuleCollider>() is { } capsule)
             {
                 float scale = Mathf.Max(capsule.transform.lossyScale.x, capsule.transform.lossyScale.z);
                 prototype.SetCollider(true, capsule.radius * scale, capsule.height * capsule.transform.lossyScale.y + Mathf.Max(0f, capsule.center.y - capsule.height * 0.5f));
+                collider = "trunk capsule";
             }
-            else prototype.SetCollider(false, prototype.ColliderRadius, prototype.ColliderHeight);
+            else if (source.GetComponentInChildren<BoxCollider>() is { } box)
+            {
+                Vector3 boxSize = Vector3.Scale(box.size, box.transform.lossyScale);
+                prototype.SetCollider(true, (boxSize.x + boxSize.z) * 0.25f, boxSize.y + Mathf.Max(0f, box.center.y - box.size.y * 0.5f));
+                collider = "trunk capsule from a box";
+            }
+            else if (source.GetComponentInChildren<MeshCollider>() is { sharedMesh: not null } meshCollider)
+            {
+                prototype.SetMeshCollider(meshCollider.sharedMesh);
+                collider = "mesh collider";
+            }
+            else
+            {
+                prototype.SetCollider(false, prototype.ColliderRadius, prototype.ColliderHeight);
+                collider = "no collider";
+            }
 
             EditorUtility.SetDirty(prototype);
             AssetDatabase.SaveAssetIfDirty(prototype);
             return $"{prototype.name}: {lods.Length} LODs ({string.Join(", ", System.Array.ConvertAll(lods, x => $"{x.Mesh.vertexCount} verts to {x.Distance:0} m"))}), " +
-                   $"{(capsule != null ? "trunk capsule" : "no collider")}.";
+                   $"{collider}, {(swaying ? "wind" : "static")}.";
         }
 
         // One mesh for a LOD's renderers, and the source material of each of its submeshes.
@@ -163,6 +193,7 @@ namespace Strata.Editor
             bool created = material == null;
             if (created) material = new Material(shader) { name = source.name };
             material.shader = shader;
+            Saved saved = new(source);
 
             if (source.HasProperty("_WindStrength") && source.HasProperty("_HueVariation") && !source.HasProperty("_BaseMap"))
             {
@@ -177,32 +208,192 @@ namespace Strata.Editor
             }
             else
             {
-                Texture albedo = Texture(source, "_BaseMap", "_MainTex", "_BaseColorMap");
-                material.SetTexture("_BaseMap", albedo);
-                material.SetColor("_BaseColor", source.HasProperty("_BaseColor") ? source.GetColor("_BaseColor") : source.HasProperty("_Color") ? source.GetColor("_Color") : Color.white);
-                Texture normal = Texture(source, "_BumpMap", "_NormalMap");
-                material.SetTexture("_BumpMap", normal);
-                bool clip = source.IsKeywordEnabled("_ALPHATEST_ON") || source.HasProperty("_AlphaClip") && source.GetFloat("_AlphaClip") > 0.5f ||
+                // textured (URP Lit, HDRP Lit, SpeedTree): foliage is whatever carries a subsurface or thickness map
+                material.SetFloat("_VertexColour", 0f);
+                material.SetTexture("_BaseMap", saved.Texture("_BaseMap", "_MainTex", "_BaseColorMap"));
+                material.SetColor("_BaseColor", saved.Colour(Color.white, "_BaseColor", "_Color"));
+                material.SetTexture("_BumpMap", saved.Texture("_BumpMap", "_NormalMap", "_Normal"));
+                bool clip = saved.Keyword("_ALPHATEST_ON") || saved.Float(0f, "_AlphaClip", "_AlphaCutoffEnable") > 0.5f ||
                             source.renderQueue >= (int)RenderQueue.AlphaTest && source.renderQueue < (int)RenderQueue.Transparent;
+                bool foliage = saved.Texture("_SubsurfaceTex", "_ThicknessMap", "_TransmissionMaskMap", "_TransmissionThicknessMap") != null;
+                bool twoSided = saved.Keyword("_DOUBLESIDED_ON") || saved.Float(2f, "_CullMode", "_Cull") < 0.5f;
                 material.SetFloat("_AlphaClip", clip ? 1f : 0f);
-                material.SetFloat("_Cutoff", source.HasProperty("_Cutoff") ? source.GetFloat("_Cutoff") : 0.5f);
-                material.SetFloat("_Smoothness", source.HasProperty("_Smoothness") ? source.GetFloat("_Smoothness") * 0.5f : 0.2f);
-                material.SetFloat("_Cull", clip ? (float)CullMode.Off : (float)CullMode.Back);
+                float cutoff = saved.Float(-1f, "_AlphaClipThreshold", "_Alpha_Clip_Threshold", "_AlphaCutoff", "_Cutoff");
+                material.SetFloat("_Cutoff", cutoff > 0f ? cutoff : 0.5f);
+                // SpeedTree keeps smoothness in its extra map (its _Smoothness is a multiplier); a mask map (HDRP) scales it
+                // down, which a constant can only approximate
+                float smoothness = saved.Texture("_ExtraTex") != null ? -1f : saved.Float(-1f, "_Smoothness", "_Glossiness");
+                if (smoothness >= 0f) smoothness *= saved.Float(1f, "_SmoothnessRemapMax") * (saved.Texture("_MaskMap") != null ? 0.6f : 1f);
+                material.SetFloat("_Smoothness", smoothness >= 0f ? Mathf.Min(smoothness, 0.6f) : foliage ? 0.25f : 0.1f);
+                material.SetFloat("_Cull", twoSided ? (float)CullMode.Off : (float)CullMode.Back);
                 material.SetFloat("_FoliageSource", 0f);
-                material.SetFloat("_Foliage", clip ? 1f : 0f);
+                material.SetFloat("_Foliage", foliage ? 1f : 0f);
+                material.SetFloat("_Translucency", foliage ? 0.4f : 0f);
+                material.SetFloat("_HueVariation", foliage ? 0.12f : 0f);
+                material.SetFloat("_BrightnessVariation", 0.08f);
                 material.SetFloat("_WindSource", 1f);
-                material.SetFloat("_WindStrength", clip ? 0.25f : 0.08f);
             }
             if (created) AssetDatabase.CreateAsset(material, path);
             else EditorUtility.SetDirty(material);
             return material;
         }
 
-        private static Texture Texture(Material material, params string[] names)
+        // The mean linear colour of a texture's opaque texels (alpha over a half), from a small blit read back.
+        private static Color MeanColour(Texture2D texture)
         {
-            foreach (string name in names)
-                if (material.HasProperty(name) && material.GetTexture(name) != null) return material.GetTexture(name);
-            return null;
+            if (texture == null) return Color.gray;
+            RenderTexture target = RenderTexture.GetTemporary(64, 64, 0, RenderTextureFormat.ARGB32, RenderTextureReadWrite.Linear);
+            Graphics.Blit(texture, target);
+            RenderTexture previous = RenderTexture.active;
+            RenderTexture.active = target;
+            Texture2D read = new(64, 64, TextureFormat.RGBA32, false, true);
+            read.ReadPixels(new Rect(0, 0, 64, 64), 0, 0, false);
+            RenderTexture.active = previous;
+            RenderTexture.ReleaseTemporary(target);
+            Color sum = Color.clear;
+            int count = 0;
+            foreach (Color pixel in read.GetPixels())
+                if (pixel.a > 0.5f)
+                {
+                    sum += pixel;
+                    count++;
+                }
+            Object.DestroyImmediate(read);
+            return count > 0 ? sum / count : Color.gray;
+        }
+
+        // SpeedTree stores ambient occlusion as grey vertex colours.
+        private static bool HasGreyVertexColours(Mesh mesh)
+        {
+            if (mesh == null || !mesh.isReadable || !mesh.HasVertexAttribute(VertexAttribute.Color)) return false;
+            Color[] colours = mesh.colors;
+            float sum = 0f;
+            foreach (Color c in colours)
+            {
+                if (Mathf.Abs(c.r - c.g) > 0.02f || Mathf.Abs(c.g - c.b) > 0.02f) return false;
+                sum += c.r;
+            }
+            return colours.Length > 0 && sum / colours.Length < 0.97f;
+        }
+
+        private static bool IsBillboard(Renderer renderer) =>
+            renderer != null && System.Array.Exists(renderer.sharedMaterials, m => m != null && (m.name.Contains("Billboard") || new Saved(m).Keyword("EFFECT_BILLBOARD")));
+
+        // One wind for every textured material of a prototype, so bark and leaves move together: sway rising to
+        // strength per metre of height at the top, or none at all when nothing is foliage (rocks). Vertex-coloured
+        // materials keep their own sway. Returns whether it sways.
+        private static bool SetWind(List<Material> materials, float height, float strengthPerMetre)
+        {
+            bool foliage = materials.Exists(m => m != null && (m.GetFloat("_Foliage") > 0.5f || m.GetFloat("_FoliageSource") > 0.5f));
+            foreach (Material material in materials)
+            {
+                if (material == null || material.GetFloat("_VertexColour") > 0.5f) continue;
+                material.SetFloat("_WindSource", 1f);
+                material.SetFloat("_WindHeight", height);
+                material.SetFloat("_WindStrength", foliage ? Mathf.Clamp(height * strengthPerMetre, 0.05f, 0.6f) : 0f);
+                EditorUtility.SetDirty(material);
+            }
+            return foliage;
+        }
+
+        // A material's saved properties, which outlive its shader (a missing shader reports none of them).
+        private readonly struct Saved
+        {
+            private readonly Material _material;
+            private readonly SerializedObject _object;
+
+            public Saved(Material material)
+            {
+                _material = material;
+                _object = new SerializedObject(material);
+            }
+
+            public Texture Texture(params string[] names)
+            {
+                foreach (string name in names)
+                {
+                    if (_material.HasProperty(name) && _material.GetTexture(name) != null) return _material.GetTexture(name);
+                    SerializedProperty entry = Find("m_SavedProperties.m_TexEnvs", name);
+                    if (entry?.FindPropertyRelative("second.m_Texture").objectReferenceValue is Texture texture) return texture;
+                }
+                return null;
+            }
+
+            public float Float(float fallback, params string[] names)
+            {
+                foreach (string name in names)
+                {
+                    if (_material.HasProperty(name)) return _material.GetFloat(name);
+                    SerializedProperty entry = Find("m_SavedProperties.m_Floats", name);
+                    if (entry != null) return entry.FindPropertyRelative("second").floatValue;
+                }
+                return fallback;
+            }
+
+            public Color Colour(Color fallback, params string[] names)
+            {
+                foreach (string name in names)
+                {
+                    if (_material.HasProperty(name)) return _material.GetColor(name);
+                    SerializedProperty entry = Find("m_SavedProperties.m_Colors", name);
+                    if (entry != null) return entry.FindPropertyRelative("second").colorValue;
+                }
+                return fallback;
+            }
+
+            public bool Keyword(string keyword) => System.Array.IndexOf(_material.shaderKeywords, keyword) >= 0;
+
+            private SerializedProperty Find(string list, string name)
+            {
+                SerializedProperty array = _object.FindProperty(list);
+                if (array == null) return null;
+                for (int i = 0; i < array.arraySize; i++)
+                {
+                    SerializedProperty entry = array.GetArrayElementAtIndex(i);
+                    if (entry.FindPropertyRelative("first").stringValue == name) return entry;
+                }
+                return null;
+            }
+        }
+
+        // Creates (or refreshes) a grass prototype for a small prefab: its mesh (combined if need be), Strata/Tree copies
+        // of its materials with gentle wind and the ground tint, and the given density (clumps per square metre), range
+        // and scale.
+        public static StrataGrassPrototype CreateGrassPrototype(GameObject prefab, string folder, float density, float range, Vector2 scale)
+        {
+            EnsureFolder(folder);
+            EnsureFolder($"{folder}/Materials");
+            (Mesh mesh, Material[] sources) = MeshOf(prefab.GetComponentsInChildren<MeshRenderer>(), prefab.transform, $"{folder}/{prefab.name} Mesh.asset");
+            Material[] materials = new Material[sources.Length];
+            for (int m = 0; m < sources.Length; m++) materials[m] = Convert(sources[m], $"{folder}/Materials");
+            float height = Mathf.Max(mesh.bounds.max.y, 0.05f);
+            foreach (Material material in materials)
+            {
+                if (material.GetFloat("_VertexColour") > 0.5f) continue;
+                material.SetFloat("_Foliage", 1f);
+                material.SetFloat("_Translucency", 0.5f);
+                material.SetFloat("_WindSource", 1f);
+                material.SetFloat("_WindHeight", height);
+                material.SetFloat("_WindStrength", Mathf.Clamp(height * 0.15f, 0.03f, 0.2f));
+                // a greyscale texture is meant to be coloured by the ground; a coloured one only blends into it at the base
+                Color mean = MeanColour(material.GetTexture("_BaseMap") as Texture2D);
+                bool grey = Mathf.Max(Mathf.Abs(mean.r - mean.g), Mathf.Abs(mean.g - mean.b), Mathf.Abs(mean.r - mean.b)) < 0.03f;
+                material.SetFloat("_GroundMultiply", grey ? 1f / Mathf.Max(mean.grayscale, 0.05f) : 0f);
+                material.SetFloat("_GroundTint", grey ? 0.3f : 0.6f);
+                material.SetFloat("_GroundTintHeight", height);
+                EditorUtility.SetDirty(material);
+            }
+            string path = $"{folder}/{prefab.name}.asset";
+            StrataGrassPrototype prototype = AssetDatabase.LoadAssetAtPath<StrataGrassPrototype>(path);
+            if (prototype == null)
+            {
+                prototype = ScriptableObject.CreateInstance<StrataGrassPrototype>();
+                AssetDatabase.CreateAsset(prototype, path);
+            }
+            prototype.Set(mesh, materials, density, range, scale);
+            EditorUtility.SetDirty(prototype);
+            AssetDatabase.SaveAssets();
+            return prototype;
         }
 
         private static float MaxSize(GameObject source)
@@ -258,6 +449,7 @@ namespace Strata.Editor
             Material foliage = System.Array.Find(lod.Materials, m => m != null && (m.GetFloat("_FoliageSource") > 0.5f || m.GetFloat("_Foliage") > 0.5f)) ?? lod.Materials[0];
             foreach (string name in new[] { "_Translucency", "_HueVariation", "_BrightnessVariation", "_Smoothness" })
                 material.SetFloat(name, foliage.GetFloat(name));
+            material.SetFloat("_Brightness", prototype.ImpostorBrightness);
             EditorUtility.SetDirty(material);
             prototype.SetImpostor(material, bounds);
             EditorUtility.SetDirty(prototype);

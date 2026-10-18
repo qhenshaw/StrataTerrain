@@ -5,18 +5,19 @@ using UnityEngine;
 
 namespace Strata
 {
-    // Trunk capsules for the trees inside each active collision chunk: when the terrain's collision activates a chunk,
-    // every tree standing in it whose prototype has a collider gets a pooled CapsuleCollider (on the collision layer, so
-    // physics and NavMesh building see it with the ground); when the chunk deactivates they go back to the pool. Trees
-    // changing in a tile rebuild the capsules of the chunks over it.
+    // Colliders for the trees inside each active collision chunk: when the terrain's collision activates a chunk, every
+    // tree standing in it whose prototype has a collider gets a pooled trunk CapsuleCollider, or a MeshCollider turned
+    // and scaled like the instance (rocks), on the collision layer so physics and NavMesh building see them with the
+    // ground; when the chunk deactivates they go back to the pools. Trees changing rebuild the colliders of every chunk.
     public sealed class StrataTreeColliders : IDisposable
     {
         private readonly StrataTrees _trees;
         private readonly StrataCollision _collision;
         private readonly Transform _root;
         private readonly int _layer;
-        private readonly Dictionary<int2, List<CapsuleCollider>> _active = new();
+        private readonly Dictionary<int2, List<Collider>> _active = new();
         private readonly Stack<CapsuleCollider> _pool = new();
+        private readonly Stack<MeshCollider> _meshPool = new();
 
         public int ActiveCount { get; private set; }
 
@@ -36,14 +37,14 @@ namespace Strata
         private void OnChunkActivated(int2 chunk, Bounds bounds)
         {
             if (_active.ContainsKey(chunk)) return;
-            List<CapsuleCollider> colliders = new();
+            List<Collider> colliders = new();
             _active[chunk] = colliders;
             Fill(bounds, colliders);
         }
 
         private void OnChunkDeactivated(int2 chunk, Bounds bounds)
         {
-            if (!_active.Remove(chunk, out List<CapsuleCollider> colliders)) return;
+            if (!_active.Remove(chunk, out List<Collider> colliders)) return;
             Release(colliders);
         }
 
@@ -52,14 +53,14 @@ namespace Strata
             List<int2> chunks = new(_active.Keys);
             foreach (int2 chunk in chunks)
             {
-                List<CapsuleCollider> colliders = _active[chunk];
+                List<Collider> colliders = _active[chunk];
                 Release(colliders);
                 Fill(_collision.ChunkBounds(chunk), colliders);
             }
         }
 
         // Capsules for the trees whose bases lie in [min, max) of the chunk on x and z.
-        private void Fill(Bounds bounds, List<CapsuleCollider> colliders)
+        private void Fill(Bounds bounds, List<Collider> colliders)
         {
             StrataGrid grid = _trees.Grid;
             IReadOnlyList<StrataTreePrototype> prototypes = _trees.Prototypes;
@@ -87,7 +88,17 @@ namespace Strata
                         {
                             float4 tree = tile.Instances[i];
                             if (tree.x < min.x || tree.x >= max.x || tree.z < min.y || tree.z >= max.y) continue;
-                            float scale = tile.Records[i].Scale;
+                            StrataTreeRecord record = tile.Records[i];
+                            float scale = record.Scale;
+                            if (prototype.ColliderKind == StrataColliderKind.Mesh)
+                            {
+                                MeshCollider shape = TakeMesh();
+                                shape.sharedMesh = prototype.ColliderMesh;
+                                shape.transform.SetPositionAndRotation(new Vector3(tree.x, tree.y, tree.z), record.Rotation);
+                                shape.transform.localScale = Vector3.one * scale;
+                                colliders.Add(shape);
+                                continue;
+                            }
                             CapsuleCollider capsule = Take();
                             capsule.radius = prototype.ColliderRadius * scale;
                             capsule.height = math.max(prototype.ColliderHeight * scale, capsule.radius * 2f);
@@ -116,12 +127,26 @@ namespace Strata
             return capsule;
         }
 
-        private void Release(List<CapsuleCollider> colliders)
+        private MeshCollider TakeMesh()
         {
-            foreach (CapsuleCollider capsule in colliders)
+            if (_meshPool.Count > 0)
             {
-                capsule.gameObject.SetActive(false);
-                _pool.Push(capsule);
+                MeshCollider pooled = _meshPool.Pop();
+                pooled.gameObject.SetActive(true);
+                return pooled;
+            }
+            GameObject go = new("Tree Mesh Collider") { layer = _layer, hideFlags = HideFlags.DontSave };
+            go.transform.SetParent(_root, false);
+            return go.AddComponent<MeshCollider>();
+        }
+
+        private void Release(List<Collider> colliders)
+        {
+            foreach (Collider collider in colliders)
+            {
+                collider.gameObject.SetActive(false);
+                if (collider is MeshCollider shape) _meshPool.Push(shape);
+                else _pool.Push((CapsuleCollider)collider);
             }
             ActiveCount -= colliders.Count;
             colliders.Clear();

@@ -19,6 +19,8 @@ StructuredBuffer<float4> _StrataLayerData;  // 3 per layer: (1/tile, normal stre
 #define STRATA_HAS_NORMAL 2
 #define STRATA_HAS_MASK 4
 #define STRATA_STOCHASTIC 8
+#define STRATA_MASK_MHER 16
+#define STRATA_NORMAL_DIRECTX 32
 
 struct StrataLayers
 {
@@ -129,6 +131,9 @@ LayerSurface SampleProjection(int layer, float2 uv, float far, float4 data0, flo
         half3 albedo = (flags & STRATA_HAS_ALBEDO) ? SampleMap(TEXTURE2D_ARRAY_ARGS(_StrataLayerAlbedo, sampler_StrataLayerAlbedo), at, layer, stochastic).rgb : 0.5;
         half3 normal = (flags & STRATA_HAS_NORMAL) ? UnpackNormal(SampleMap(TEXTURE2D_ARRAY_ARGS(_StrataLayerNormal, sampler_StrataLayerAlbedo), at, layer, stochastic)) : half3(0, 0, 1);
         half4 mask = (flags & STRATA_HAS_MASK) ? SampleMap(TEXTURE2D_ARRAY_ARGS(_StrataLayerMask, sampler_StrataLayerAlbedo), at, layer, stochastic) : half4(0, 1, 0.5, 0.2);
+        // metallic, height, emission, roughness to metallic, occlusion, height, smoothness
+        if ((flags & (STRATA_HAS_MASK | STRATA_MASK_MHER)) == (STRATA_HAS_MASK | STRATA_MASK_MHER)) mask = half4(mask.r, 1.0, mask.g, 1.0 - mask.a);
+        if (flags & STRATA_NORMAL_DIRECTX) normal.y = -normal.y;
         if (step == 0 || amount >= 0.999) { s.albedo = albedo; s.normalTS = normal; s.mask = mask; }
         else { s.albedo = lerp(s.albedo, albedo, amount); s.normalTS = normalize(lerp(s.normalTS, normal, amount)); s.mask = lerp(s.mask, mask, amount); }
     }

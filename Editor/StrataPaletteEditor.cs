@@ -12,6 +12,11 @@ namespace Strata.Editor
     {
         private static readonly int[] Sizes = { 512, 1024, 2048, 4096 };
         private int _size = 1024;
+        // the packing check, redone only when the palette or a layer changes (packing for real on every repaint copies
+        // every texture and reads colours back from the GPU, which stalls the inspector)
+        private int _checkedVersion = int.MinValue;
+        private List<string> _problems = new();
+        private Vector2Int _albedoSize;
 
         public override void OnInspectorGUI()
         {
@@ -19,17 +24,23 @@ namespace Strata.Editor
             StrataPalette palette = (StrataPalette)target;
 
             EditorGUILayout.Space();
-            using (StrataPaletteTextures textures = new(palette))
+            if (palette.Version != _checkedVersion)
             {
-                if (textures.Problems.Count == 0)
-                    EditorGUILayout.HelpBox($"{palette.Layers.Count} layers pack into {textures.Albedo.width}x{textures.Albedo.height} arrays.", MessageType.None);
-                foreach (string problem in textures.Problems) EditorGUILayout.HelpBox(problem, MessageType.Warning);
+                _checkedVersion = palette.Version;
+                _problems = StrataPaletteTextures.Check(palette, out _albedoSize);
             }
+            if (_problems.Count == 0)
+                EditorGUILayout.HelpBox($"{palette.Layers.Count} layers pack into {_albedoSize.x}x{_albedoSize.y} arrays.", MessageType.None);
+            foreach (string problem in _problems) EditorGUILayout.HelpBox(problem, MessageType.Warning);
 
             using (new EditorGUILayout.HorizontalScope())
             {
                 _size = EditorGUILayout.IntPopup("Texture Size", _size, System.Array.ConvertAll(Sizes, s => s.ToString()), Sizes);
-                if (GUILayout.Button("Fix Import Settings")) Debug.Log(FixImportSettings(palette, _size), palette);
+                if (GUILayout.Button("Fix Import Settings"))
+                {
+                    Debug.Log(FixImportSettings(palette, _size), palette);
+                    _checkedVersion = int.MinValue;
+                }
             }
         }
 
