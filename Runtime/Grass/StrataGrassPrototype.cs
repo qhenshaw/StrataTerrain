@@ -3,8 +3,8 @@ using UnityEngine;
 namespace Strata
 {
     // One kind of grass or small detail (a clump of blades, a flower, a fern): a small mesh drawn with a Strata/Tree
-    // material, how many clumps a square metre holds at full density, how far it is drawn (thinning out over the last
-    // third of the range), and how clumps vary. Clumps are generated on the GPU around each camera every frame from the
+    // material, how many clumps a square metre holds at full density, how far it is drawn (thinning out, with the
+    // remaining clumps growing, past 30% of the range), and how clumps vary. Clumps are generated on the GPU around each camera every frame from the
     // world's grass density maps, so nothing per clump is stored.
     [CreateAssetMenu(menuName = "Strata/Grass Prototype", fileName = "StrataGrassPrototype")]
     public class StrataGrassPrototype : ScriptableObject
@@ -14,7 +14,7 @@ namespace Strata
         [SerializeField] private Material[] _materials = new Material[1];
         [Tooltip("Clumps per square metre at full density.")]
         [SerializeField, Range(0.05f, 12f)] private float _density = 4f;
-        [Tooltip("How far clumps are drawn, in metres; they thin out over the last third.")]
+        [Tooltip("How far clumps are drawn, in metres; past 30% of it they thin out, the rest growing to keep the ground covered.")]
         [SerializeField, Range(5f, 300f)] private float _range = 100f;
         [SerializeField] private Vector2 _scale = new(0.8f, 1.2f);
         [Tooltip("How far clumps tilt towards the ground's normal (0 upright, 1 fully).")]

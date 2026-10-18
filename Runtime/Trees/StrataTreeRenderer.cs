@@ -13,23 +13,31 @@ namespace Strata
     // Draws a world's trees through a BatchRendererGroup. Every tree is one instance in a single batch whose only
     // per-instance property is a float4 (base position, and yaw, scale and lean packed into w); the tree shaders build
     // the transform from it, so a tree costs 16 bytes of GPU memory. Each tile owns a segment of the instance buffer,
-    // rewritten when its trees change. Per view, a Burst job walks the 64 m cells, frustum-culls them, and gives each
-    // run of a prototype its LOD: whole runs at once when the cell lies within one LOD, otherwise tree by tree, with
-    // trees in a crossfade band drawn by both LODs and their fade packed into the visible list. Beyond the last mesh
+    // rewritten when its trees change. Per view, a parallel Burst job walks the 64 m cells, frustum-culls them, and gives
+    // each run of a prototype its LOD: whole runs at once (as a range) when the cell lies within one LOD, otherwise tree
+    // by tree, with trees in a crossfade band drawn by both LODs and their fade packed into the visible list; a second
+    // job sorts the results into one draw command per prototype, LOD, submesh and set of shadow splits. Beyond the last mesh
     // LOD trees draw as impostor quads, which cast shadows into every cascade that sees them (cascades split by view depth
-    // while LODs go by distance, so from above, impostors stand over ground in the nearer cascades too).
+    // while LODs go by distance, so from above, impostors stand over ground in the nearer cascades too). The last
+    // mesh LODs can cast the impostor's shadow instead (Impostor Shadow LODs): far meshes are costly in the shadow map.
+    // That stand-in card is drawn with a copy of the impostor material pushed towards the light by part of the tree's
+    // radius (Impostor Shadow Push): through the tree's centre it would leave the lit half of the mesh unshaded, brighter
+    // than its neighbours. Refresh rebuilds the draws when a prototype is edited.
     public sealed unsafe class StrataTreeRenderer : IDisposable
     {
         private const int HeaderBytes = 64;
         private const int MatrixBytes = 48;
         private const int TreeDataOffset = HeaderBytes + MatrixBytes * 2;
         private const int MaxSplits = 6;
-        private const int SlotCount = StrataTreePrototype.MaxLods + 1;
+        // slots: the mesh LODs, the impostor (at LodCount), and the impostor standing in for mesh LOD shadows
+        private const int SlotCount = StrataTreePrototype.MaxLods + 2;
+        private const int StandInSlot = StrataTreePrototype.MaxLods + 1;
         private const float ReferenceHalfFov = 0.5235988f;
 
         private static readonly int ObjectToWorldId = Shader.PropertyToID("unity_ObjectToWorld");
         private static readonly int WorldToObjectId = Shader.PropertyToID("unity_WorldToObject");
         private static readonly int TreeId = Shader.PropertyToID("_StrataTree");
+        private static readonly int ShadowPushId = Shader.PropertyToID("_ShadowPush");
 
         private struct PrototypeCull
         {
@@ -40,6 +48,8 @@ namespace Strata
             public bool HasImpostor;
             public bool CastShadows;
             public bool ImpostorShadows;
+            // the first slot whose shadow is drawn by the impostor
+            public int ShadowImpostorFrom;
             public float MaxEnd;
         }
 
@@ -63,6 +73,9 @@ namespace Strata
         private readonly BatchMeshID _quadId;
         private readonly List<BatchMeshID> _meshIds = new();
         private readonly List<BatchMaterialID> _materialIds = new();
+        private readonly List<Material> _standInMaterials = new();
+        private IReadOnlyList<StrataTreePrototype> _prototypeList = Array.Empty<StrataTreePrototype>();
+        private int[] _prototypeVersions = Array.Empty<int>();
         private readonly int[] _segmentOffset;
         private readonly int[] _segmentCapacity;
         private GraphicsBuffer _instanceData;
@@ -77,10 +90,15 @@ namespace Strata
         private bool _cellsDirty = true;
 
         public bool CastShadows { get; set; } = true;
+        // Off draws nothing (for profiling what the trees cost).
+        public bool Enabled { get; set; } = true;
         public int Layer { get; set; }
         // Multiplies every prototype's LOD and impostor distances.
         public float DistanceScale { get; set; } = 1f;
         public double LastCullMilliseconds { get; private set; }
+        public double LastCameraCullMilliseconds { get; private set; }
+        public double LastShadowCullMilliseconds { get; private set; }
+        public int LastShadowTrees { get; private set; }
         public int LastVisibleTrees { get; private set; }
         public long GpuBytes => _instanceData != null ? (long)_instanceData.count * 4 : 0;
 
@@ -114,10 +132,14 @@ namespace Strata
             foreach (BatchMeshID id in _meshIds) _brg.UnregisterMesh(id);
             _materialIds.Clear();
             _meshIds.Clear();
+            DestroyStandInMaterials();
             _prototypes.Dispose();
             _slots.Dispose();
             _submeshes.Dispose();
 
+            _prototypeList = prototypes;
+            _prototypeVersions = new int[prototypes.Count];
+            for (int p = 0; p < prototypes.Count; p++) _prototypeVersions[p] = prototypes[p] != null ? prototypes[p].Version : 0;
             int count = math.max(1, prototypes.Count);
             _prototypes = new NativeArray<PrototypeCull>(count, Allocator.Persistent);
             _slots = new NativeArray<SlotDraws>(count * SlotCount, Allocator.Persistent);
@@ -134,6 +156,9 @@ namespace Strata
                     ImpostorEnd = prototype.ImpostorDistance,
                     CastShadows = prototype.CastShadows,
                     ImpostorShadows = prototype.ImpostorShadows,
+                    ShadowImpostorFrom = prototype.HasImpostor && prototype.ImpostorShadows
+                        ? math.max(1, prototype.LodCount - prototype.ImpostorShadowLods)
+                        : prototype.LodCount,
                     MaxEnd = prototype.MaxDistance
                 };
                 for (int l = 0; l < prototype.LodCount; l++)
@@ -157,10 +182,32 @@ namespace Strata
                     _slots[p * SlotCount + prototype.LodCount] = new SlotDraws { First = submeshes.Count, Count = 1 };
                     submeshes.Add(new SubmeshDraw { Mesh = _quadId, Material = material, Submesh = 0 });
                 }
+                if (cull.ShadowImpostorFrom < prototype.LodCount)
+                {
+                    Material standIn = new(prototype.ImpostorMaterial) { name = $"{prototype.ImpostorMaterial.name} (Shadow Stand-in)", hideFlags = HideFlags.HideAndDontSave };
+                    standIn.SetFloat(ShadowPushId, prototype.ImpostorShadowPush);
+                    _standInMaterials.Add(standIn);
+                    BatchMaterialID material = _brg.RegisterMaterial(standIn);
+                    _materialIds.Add(material);
+                    _slots[p * SlotCount + StandInSlot] = new SlotDraws { First = submeshes.Count, Count = 1 };
+                    submeshes.Add(new SubmeshDraw { Mesh = _quadId, Material = material, Submesh = 0 });
+                }
                 _prototypes[p] = cull;
             }
             _submeshes = new NativeArray<SubmeshDraw>(math.max(1, submeshes.Count), Allocator.Persistent);
             for (int i = 0; i < submeshes.Count; i++) _submeshes[i] = submeshes[i];
+        }
+
+        // Registers the prototypes again if any was edited since.
+        public void Refresh()
+        {
+            for (int p = 0; p < _prototypeVersions.Length; p++)
+            {
+                StrataTreePrototype prototype = p < _prototypeList.Count ? _prototypeList[p] : null;
+                if ((prototype != null ? prototype.Version : 0) == _prototypeVersions[p]) continue;
+                SetPrototypes(_prototypeList);
+                return;
+            }
         }
 
         private void OnTreesChanged(int tile)
@@ -251,6 +298,12 @@ namespace Strata
             }
         }
 
+        private void DestroyStandInMaterials()
+        {
+            foreach (Material material in _standInMaterials) UnityEngine.Object.DestroyImmediate(material);
+            _standInMaterials.Clear();
+        }
+
         public void Dispose()
         {
             _trees.Changed -= OnTreesChanged;
@@ -259,6 +312,7 @@ namespace Strata
             foreach (BatchMeshID id in _meshIds) _brg.UnregisterMesh(id);
             _brg.UnregisterMesh(_quadId);
             _brg.Dispose();
+            DestroyStandInMaterials();
             _instanceData?.Dispose();
             if (_instances.IsCreated) _instances.Dispose();
             _cells.Dispose();
@@ -280,6 +334,7 @@ namespace Strata
 
         private JobHandle OnPerformCulling(BatchRendererGroup group, BatchCullingContext context, BatchCullingOutput output, IntPtr userContext)
         {
+            if (!Enabled) return default;
             bool shadow = context.viewType == BatchCullingViewType.Light;
             if (context.viewType != BatchCullingViewType.Camera && !shadow) return default;
             if (shadow && !CastShadows) return default;
@@ -294,61 +349,69 @@ namespace Strata
             *commands = default;
 
             long started = System.Diagnostics.Stopwatch.GetTimestamp();
-            new CullJob
+            NativeArray<StrataTreeCell> cells = _cells.AsArray();
+            NativeStream items = new(cells.Length, Allocator.TempJob);
+            JobHandle classify = new ClassifyJob
             {
-                Cells = _cells.AsArray(),
+                Cells = cells,
                 Runs = _runs.AsArray(),
                 Instances = _instances,
                 Prototypes = _prototypes,
                 Slots = _slots,
-                Submeshes = _submeshes,
                 Planes = context.cullingPlanes,
                 Splits = context.cullingSplits,
                 SplitCount = splits,
                 Shadow = shadow,
                 CameraPosition = lod.cameraPosition,
                 DistanceFactor = math.max(fovScale, 1e-3f) / math.max(DistanceScale, 1e-3f),
+                Items = items.AsWriter()
+            }.Schedule(cells.Length, 16);
+            new EmitJob
+            {
+                Items = items.AsReader(),
+                CellCount = cells.Length,
+                BucketCount = _prototypes.Length * SlotCount * (shadow ? 1 << splits : 1),
+                MaskCount = shadow ? 1 << splits : 1,
+                Shadow = shadow,
+                Slots = _slots,
+                Submeshes = _submeshes,
                 Output = commands,
                 Batch = _batch,
                 Layer = (byte)Layer
-            }.Run();
-            // run inline, as the terrain renderer does, so the output is never touched after Unity releases it
+            }.Schedule(classify).Complete();
+            items.Dispose();
+            // completed inline, as the terrain renderer does, so the output is never touched after Unity releases it
             LastCullMilliseconds = (System.Diagnostics.Stopwatch.GetTimestamp() - started) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
-            if (!shadow) LastVisibleTrees = commands->visibleInstanceCount;
+            if (!shadow) (LastCameraCullMilliseconds, LastVisibleTrees) = (LastCullMilliseconds, commands->visibleInstanceCount);
+            else (LastShadowCullMilliseconds, LastShadowTrees) = (LastCullMilliseconds, commands->visibleInstanceCount);
             return default;
         }
 
+        // A cull result: a range of instances (x first, y count) or one instance with its fade packed in (x, y = -1),
+        // and the draw bucket (z) it goes to.
         [BurstCompile]
-        private struct CullJob : IJob
+        private struct ClassifyJob : IJobParallelFor
         {
             [ReadOnly] public NativeArray<StrataTreeCell> Cells;
             [ReadOnly] public NativeArray<StrataTreeRun> Runs;
             [ReadOnly] public NativeArray<float4> Instances;
             [ReadOnly] public NativeArray<PrototypeCull> Prototypes;
             [ReadOnly] public NativeArray<SlotDraws> Slots;
-            [ReadOnly] public NativeArray<SubmeshDraw> Submeshes;
             [ReadOnly] public NativeArray<Plane> Planes;
             [ReadOnly] public NativeArray<CullingSplit> Splits;
             public int SplitCount;
             public bool Shadow;
             public float3 CameraPosition;
             public float DistanceFactor;
-            [NativeDisableUnsafePtrRestriction] public BatchCullingOutputDrawCommands* Output;
-            public BatchID Batch;
-            public byte Layer;
+            public NativeStream.Writer Items;
 
-            public void Execute()
+            public void Execute(int c)
             {
-                int maskCount = Shadow ? 1 << SplitCount : 1;
-                int bucketCount = Prototypes.Length * SlotCount * maskCount;
-                // x: visible index (with fade in the top byte), y: bucket
-                NativeList<int2> items = new(4096, Allocator.Temp);
-
-                for (int c = 0; c < Cells.Length; c++)
+                Items.BeginForEachIndex(c);
+                StrataTreeCell cell = Cells[c];
+                int mask = Visibility(cell.Min, cell.Max);
+                if (mask != 0)
                 {
-                    StrataTreeCell cell = Cells[c];
-                    int mask = Visibility(cell.Min, cell.Max);
-                    if (mask == 0) continue;
                     float near = NearDistance(cell.Min, cell.Max) * DistanceFactor;
                     float far = FarDistance(cell.Min, cell.Max) * DistanceFactor;
                     for (int r = cell.RunStart; r < cell.RunStart + cell.RunCount; r++)
@@ -362,8 +425,7 @@ namespace Strata
                         if (nearSlot == farSlot && nearSlot >= 0 && nearFade == 0f && farFade == 0f)
                         {
                             int bucket = Bucket(run.Prototype, nearSlot, prototype, mask);
-                            if (bucket < 0) continue;
-                            for (int i = run.Start; i < run.Start + run.Count; i++) items.Add(new int2(i, bucket));
+                            if (bucket >= 0) Items.Write(new int3(run.Start, run.Count, bucket));
                             continue;
                         }
                         for (int i = run.Start; i < run.Start + run.Count; i++)
@@ -372,74 +434,14 @@ namespace Strata
                             Choose(prototype, distance, out int slot, out float fade, out bool both);
                             if (slot < 0) continue;
                             int bucket = Bucket(run.Prototype, slot, prototype, mask);
-                            if (bucket >= 0) items.Add(new int2(Pack(i, fade), bucket));
+                            if (bucket >= 0) Items.Write(new int3(Pack(i, fade), -1, bucket));
                             if (!both) continue;
                             bucket = Bucket(run.Prototype, slot + 1, prototype, mask);
-                            if (bucket >= 0) items.Add(new int2(Pack(i, -fade), bucket));
+                            if (bucket >= 0) Items.Write(new int3(Pack(i, -fade), -1, bucket));
                         }
                     }
                 }
-
-                // counting sort into buckets, then one draw command per bucket and submesh
-                NativeArray<int> counts = new(bucketCount, Allocator.Temp);
-                for (int i = 0; i < items.Length; i++) counts[items[i].y]++;
-                NativeArray<int> offsets = new(bucketCount, Allocator.Temp);
-                int total = 0, commandCount = 0;
-                for (int b = 0; b < bucketCount; b++)
-                {
-                    offsets[b] = total;
-                    total += counts[b];
-                    if (counts[b] > 0) commandCount += Slots[b / maskCount].Count;
-                }
-
-                Output->visibleInstances = Malloc<int>(math.max(1, total));
-                Output->drawCommands = Malloc<BatchDrawCommand>(math.max(1, commandCount));
-                Output->drawRanges = Malloc<BatchDrawRange>(1);
-                int command = 0;
-                for (int b = 0; b < bucketCount; b++)
-                {
-                    if (counts[b] == 0) continue;
-                    SlotDraws draws = Slots[b / maskCount];
-                    for (int s = draws.First; s < draws.First + draws.Count; s++)
-                    {
-                        SubmeshDraw draw = Submeshes[s];
-                        Output->drawCommands[command++] = new BatchDrawCommand
-                        {
-                            visibleOffset = (uint)offsets[b],
-                            visibleCount = (uint)counts[b],
-                            batchID = Batch,
-                            materialID = draw.Material,
-                            meshID = draw.Mesh,
-                            submeshIndex = draw.Submesh,
-                            splitVisibilityMask = Shadow ? (ushort)(b % maskCount) : (ushort)0xff,
-                            flags = BatchDrawCommandFlags.LODCrossFadeValuePacked,
-                            sortingPosition = 0
-                        };
-                    }
-                }
-                for (int i = 0; i < items.Length; i++)
-                {
-                    int2 item = items[i];
-                    Output->visibleInstances[offsets[item.y]++] = item.x;
-                }
-
-                Output->drawCommandCount = command;
-                Output->visibleInstanceCount = total;
-                Output->drawRangeCount = command > 0 ? 1 : 0;
-                Output->drawRanges[0] = new BatchDrawRange
-                {
-                    drawCommandsType = BatchDrawCommandType.Direct,
-                    drawCommandsBegin = 0,
-                    drawCommandsCount = (uint)command,
-                    filterSettings = new BatchFilterSettings
-                    {
-                        renderingLayerMask = 1,
-                        layer = Layer,
-                        motionMode = MotionVectorGenerationMode.Camera,
-                        shadowCastingMode = ShadowCastingMode.On,
-                        receiveShadows = true
-                    }
-                };
+                Items.EndForEachIndex();
             }
 
             // The slot (mesh LOD, or LodCount for the impostor; -1 for none) drawn at a distance, and its fade: 0 when
@@ -470,6 +472,7 @@ namespace Strata
             {
                 if (Shadow)
                 {
+                    if (slot >= p.ShadowImpostorFrom && slot < p.LodCount) slot = StandInSlot;
                     if (slot == p.LodCount && !p.ImpostorShadows) return -1;
                     if (mask == 0) return -1;
                 }
@@ -512,6 +515,108 @@ namespace Strata
 
             private float NearDistance(float3 min, float3 max) => math.length(math.max(0f, math.max(min - CameraPosition, CameraPosition - max)));
             private float FarDistance(float3 min, float3 max) => math.length(math.max(math.abs(min - CameraPosition), math.abs(max - CameraPosition)));
+
+        }
+
+        // Counts the classified instances per bucket, lays the buckets out in the visible list, and writes one draw
+        // command per bucket and submesh.
+        [BurstCompile]
+        private struct EmitJob : IJob
+        {
+            [ReadOnly] public NativeStream.Reader Items;
+            public int CellCount;
+            public int BucketCount;
+            public int MaskCount;
+            public bool Shadow;
+            [ReadOnly] public NativeArray<SlotDraws> Slots;
+            [ReadOnly] public NativeArray<SubmeshDraw> Submeshes;
+            [NativeDisableUnsafePtrRestriction] public BatchCullingOutputDrawCommands* Output;
+            public BatchID Batch;
+            public byte Layer;
+
+            public void Execute()
+            {
+                NativeArray<int> counts = new(BucketCount, Allocator.Temp);
+                for (int c = 0; c < CellCount; c++)
+                {
+                    int n = Items.BeginForEachIndex(c);
+                    for (int i = 0; i < n; i++)
+                    {
+                        int3 item = Items.Read<int3>();
+                        counts[item.z] += item.y < 0 ? 1 : item.y;
+                    }
+                    Items.EndForEachIndex();
+                }
+                NativeArray<int> offsets = new(BucketCount, Allocator.Temp);
+                int total = 0, commandCount = 0;
+                for (int b = 0; b < BucketCount; b++)
+                {
+                    offsets[b] = total;
+                    total += counts[b];
+                    if (counts[b] > 0) commandCount += Slots[b / MaskCount].Count;
+                }
+
+                Output->visibleInstances = Malloc<int>(math.max(1, total));
+                Output->drawCommands = Malloc<BatchDrawCommand>(math.max(1, commandCount));
+                Output->drawRanges = Malloc<BatchDrawRange>(1);
+                int command = 0;
+                for (int b = 0; b < BucketCount; b++)
+                {
+                    if (counts[b] == 0) continue;
+                    SlotDraws draws = Slots[b / MaskCount];
+                    for (int s = draws.First; s < draws.First + draws.Count; s++)
+                    {
+                        SubmeshDraw draw = Submeshes[s];
+                        Output->drawCommands[command++] = new BatchDrawCommand
+                        {
+                            visibleOffset = (uint)offsets[b],
+                            visibleCount = (uint)counts[b],
+                            batchID = Batch,
+                            materialID = draw.Material,
+                            meshID = draw.Mesh,
+                            submeshIndex = draw.Submesh,
+                            splitVisibilityMask = Shadow ? (ushort)(b % MaskCount) : (ushort)0xff,
+                            flags = BatchDrawCommandFlags.LODCrossFadeValuePacked,
+                            sortingPosition = 0
+                        };
+                    }
+                }
+                for (int c = 0; c < CellCount; c++)
+                {
+                    int n = Items.BeginForEachIndex(c);
+                    for (int i = 0; i < n; i++)
+                    {
+                        int3 item = Items.Read<int3>();
+                        if (item.y < 0)
+                        {
+                            Output->visibleInstances[offsets[item.z]++] = item.x;
+                            continue;
+                        }
+                        int at = offsets[item.z];
+                        for (int k = 0; k < item.y; k++) Output->visibleInstances[at + k] = item.x + k;
+                        offsets[item.z] = at + item.y;
+                    }
+                    Items.EndForEachIndex();
+                }
+
+                Output->drawCommandCount = command;
+                Output->visibleInstanceCount = total;
+                Output->drawRangeCount = command > 0 ? 1 : 0;
+                Output->drawRanges[0] = new BatchDrawRange
+                {
+                    drawCommandsType = BatchDrawCommandType.Direct,
+                    drawCommandsBegin = 0,
+                    drawCommandsCount = (uint)command,
+                    filterSettings = new BatchFilterSettings
+                    {
+                        renderingLayerMask = 1,
+                        layer = Layer,
+                        motionMode = MotionVectorGenerationMode.Camera,
+                        shadowCastingMode = ShadowCastingMode.On,
+                        receiveShadows = true
+                    }
+                };
+            }
 
             private static T* Malloc<T>(int count) where T : unmanaged =>
                 (T*)UnsafeUtility.Malloc(UnsafeUtility.SizeOf<T>() * count, UnsafeUtility.AlignOf<T>(), Allocator.TempJob);

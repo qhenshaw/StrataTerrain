@@ -292,7 +292,9 @@ namespace Strata
             foreach (StrataWorld world in s_active)
             {
                 world.Renderer?.Rebind();
-                if (world.TreeRenderer != null) world.TreeRenderer.DistanceScale = world._settings.TreeDistanceScale;
+                if (world.TreeRenderer == null) continue;
+                world.TreeRenderer.DistanceScale = world._settings.TreeDistanceScale;
+                world.TreeRenderer.Refresh();
             }
         }
     }

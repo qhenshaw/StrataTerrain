@@ -85,7 +85,7 @@ namespace Strata
             handles.Dispose();
         }
 
-        [BurstCompile]
+        [BurstCompile(DisableSafetyChecks = true)]
         private struct PlaceJob : IJob
         {
             public StrataGrid Grid;

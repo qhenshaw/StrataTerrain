@@ -25,11 +25,13 @@ namespace Strata
         public static long Size(StrataGrid grid, long trees = 0, int grassTypes = 0) =>
             HeaderSize + grid.SamplesPerTile * 2L + 4 + grid.SplatSamplesPerTile * (10L + grassTypes) + 8 + trees * 10L;
 
-        public static void Write(string path, int samples, NativeSlice<ushort> heights, int splatSamples, NativeSlice<uint> indices,
+        // Writes a tile file, unless the file already holds exactly these bytes (so a bake rewrites only the tiles that
+        // changed). Returns whether it wrote.
+        public static bool Write(string path, int samples, NativeSlice<ushort> heights, int splatSamples, NativeSlice<uint> indices,
                                  NativeSlice<uint> weights, NativeSlice<ushort> strata, NativeArray<StrataTreeRecord> trees,
                                  int grassTypes, NativeArray<byte> grass)
         {
-            using FileStream stream = File.Create(path);
+            using MemoryStream stream = new();
             using BinaryWriter writer = new(stream);
             writer.Write(Magic);
             writer.Write(Version);
@@ -57,6 +59,13 @@ namespace Strata
             if (treeCount > 0) writer.Write(trees.Reinterpret<byte>(UnsafeUtility.SizeOf<StrataTreeRecord>()).ToArray());
             writer.Write(grassTypes);
             if (grassTypes > 0) writer.Write(grass.ToArray());
+            writer.Flush();
+
+            byte[] content = stream.ToArray();
+            if (File.Exists(path) && new FileInfo(path).Length == content.Length &&
+                ((ReadOnlySpan<byte>)File.ReadAllBytes(path)).SequenceEqual(content)) return false;
+            File.WriteAllBytes(path, content);
+            return true;
         }
 
         private static void WriteUInts(BinaryWriter writer, NativeSlice<uint> values)

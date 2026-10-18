@@ -1,7 +1,8 @@
 // Strata's grass, generated around one camera each frame. Candidate spots lie on a world-anchored jittered grid as fine
 // as the densest grass prototype allows; each keeps itself with the chance of the total grass density there (from the
-// world's per-tile density maps), picks a prototype in proportion to their densities, thins out over the last third of
-// that prototype's range, and if it is inside the camera's frustum appends one instance (base position, and yaw, scale
+// world's per-tile density maps), picks a prototype in proportion to their densities, thins out from LodStart of that
+// prototype's range to its end (growing the clumps that are left, so the ground stays covered with far fewer of them),
+// and if it is inside the camera's frustum appends one instance (base position, and yaw, scale
 // and lean packed as Strata/Tree reads them) to the prototype's region of the instance buffer, counting it in the
 // prototype's indirect draw arguments. GrassFinish clamps the counts to the regions and copies them to every submesh.
 #pragma kernel GrassReset
@@ -10,6 +11,8 @@
 
 #define HEADER_BYTES 160
 #define LEAN_STEP 2.5
+// clumps start thinning at this fraction of their range
+#define LOD_START 0.3
 
 Texture2DArray<float> _StrataHeights;
 Texture2D<float> _StrataFarHeights;
@@ -126,12 +129,15 @@ void GrassScatter(uint3 id : SV_DispatchThreadID)
     }
 
     float4 a = _Types[type * 3], b = _Types[type * 3 + 1], c = _Types[type * 3 + 2];
-    float fade = saturate((a.y - distance) / (a.y / 3.0));
+    float fade = saturate((a.y - distance) / (a.y * (1.0 - LOD_START)));
     uint h4 = Hash(uint3(h0, 4u, 17u));
     if (Unit(h4) >= fade) return;
 
     float height = HeightAt(p);
-    float scale = lerp(a.z, a.w, Unit(Hash(uint3(h0, 5u, 19u)))) * lerp(0.6, 1.0, fade);
+    // the clumps left grow as their neighbours are thinned away (by the square root, to keep the covered area), easing
+    // back down over the last tenth of the range so the edge doesn't pop
+    float grow = min(rsqrt(max(fade, 0.25)), 1.6) * saturate(fade * 10.0 + 0.4);
+    float scale = lerp(a.z, a.w, Unit(Hash(uint3(h0, 5u, 19u)))) * grow;
     if (!InFrustum(float3(p.x, height + b.z * scale, p.y), b.z * scale + 0.5)) return;
 
     float step = _StrataHeightParams.w;

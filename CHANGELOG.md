@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.8.0
+Performance. A 1920x1080 render of the 8 km test world (CPU and GPU) went from 11.7 to 6.3 ms from above the forest
+and from 11.2 to 9.0 ms at ground level.
+- Tree culling runs in parallel: a job per 64 m cell classifies its runs into a NativeStream, and a second job sorts
+  them into draw commands (0.47 to 0.29 ms per view).
+- Impostor cards are trimmed to each frame's silhouette (Frame Bounds, one texel per frame, made when the impostor is
+  baked), so far fewer transparent pixels are shaded. Re-bake impostors to get them.
+- Impostor Shadow LODs (per prototype, default 1): the last mesh LODs cast the impostor's shadow instead of their own,
+  which saves about 0.9 ms. That stand-in card is pushed towards the light (Impostor Shadow Push, default a quarter
+  of the tree's radius), so the mesh keeps shading itself (through the centre it lit the mesh's whole sunward half, a
+  too-bright band at mid range).
+- Edits to a tree prototype reach the tree renderer straight away.
+- Grass thins out past 30% of its range, with the remaining clumps growing to keep the ground covered (about a third
+  fewer clumps drawn).
+- The terrain samples only the near tiling stochastically (the far tiling hides repeats on its own).
+- Streaming: a tile's strata leaf ranges are found by a Burst function instead of a managed loop (installing a tile
+  went from about 4.2 to 1.1 ms), and tile slices upload through reused staging textures.
+- Editor: changing only a forest's species (or a prototype, or the tree seed) places the trees again from the cached
+  densities without evaluating the splats again. Placement runs without Burst safety checks. A bake rewrites only the
+  tile files whose contents changed.
+
 ## 0.7.0
 - Realistic assets. The tree builder converts materials whose shader is missing (HDRP, SpeedTree) from their saved
   properties, drops billboard LODs, reads alpha cutoffs from the HDRP and SpeedTree names, tells bark from foliage by

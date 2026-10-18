@@ -92,6 +92,18 @@ namespace Strata
             }
         }
 
+        // Changes when anything deciding where the forest grows changes (what the GPU density pass reads), but not with
+        // its species, which only the CPU placement reads.
+        public int DensityHash
+        {
+            get
+            {
+                int hash = HashCode.Combine(_density, _height, _slope, _moisture, _layerSensitivity, _noiseScale, _noiseAmount, _seed);
+                foreach (StrataForestLayer layer in _layers) hash = HashCode.Combine(hash, layer.Layer, layer.Avoid);
+                return hash;
+            }
+        }
+
         public void Set(float density, StrataRange height, StrataRange slope, StrataRange moisture, IEnumerable<StrataForestLayer> layers,
                         float noiseScale, float noiseAmount, IEnumerable<StrataTreeSpecies> species)
         {

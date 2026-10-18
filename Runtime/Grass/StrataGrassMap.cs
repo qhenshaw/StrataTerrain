@@ -78,14 +78,8 @@ namespace Strata
             int perTile = Grid.SplatSamplesPerTile;
             NativeArray<byte> grass = StrataTileFile.ReadGrass(file, Grid.Samples, Grid.SplatSamples, Allocator.Temp, out int types);
             NativeArray<byte> empty = new(perTile, Allocator.Temp);
-            Texture2D staging = new(Grid.SplatSamples, Grid.SplatSamples, GraphicsFormat.R8_UNorm, TextureCreationFlags.DontInitializePixels);
             for (int type = 0; type < Types; type++)
-            {
-                staging.SetPixelData(type < types ? grass.GetSubArray(type * perTile, perTile) : empty, 0);
-                staging.Apply(false, false);
-                Graphics.CopyTexture(staging, 0, 0, Texture, slot * Types + type, 0);
-            }
-            UnityEngine.Object.DestroyImmediate(staging);
+                StrataSliceUpload.Copy(type < types ? grass.GetSubArray(type * perTile, perTile) : empty, Grid.SplatSamples, GraphicsFormat.R8_UNorm, Texture, slot * Types + type);
             empty.Dispose();
             grass.Dispose();
         }

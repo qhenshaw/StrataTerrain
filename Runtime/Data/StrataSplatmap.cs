@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
+using Unity.Burst;
 using Unity.Collections;
+using Unity.Collections.LowLevel.Unsafe;
 using Unity.Mathematics;
 using UnityEngine;
 using UnityEngine.Experimental.Rendering;
@@ -14,6 +16,7 @@ namespace Strata
     // a tile isn't resident; the editor's evaluator writes them. The CPU keeps the splats it loaded (for ground queries)
     // and, per CDLOD leaf node of every tile, the largest geometry range of any strata in it (0 for none), which culling
     // uses to decide where to draw the finer detail patches.
+    [BurstCompile]
     public sealed class StrataSplatmap : IDisposable
     {
         public StrataGrid Grid { get; }
@@ -151,11 +154,31 @@ namespace Strata
         }
 
         // Recomputes one tile's leaf detail ranges from its strata map (low byte strength, high byte definition).
-        public void UpdateLeaves(int tile, NativeArray<ushort> strata, IReadOnlyList<StrataBandDefinition> definitions)
+        public unsafe void UpdateLeaves(int tile, NativeArray<ushort> strata, IReadOnlyList<StrataBandDefinition> definitions)
         {
             int leaves = Grid.LeavesPerSide;
-            int texelsPerLeaf = Grid.SplatResolution / leaves;
+            int count = definitions?.Count ?? 0;
+            // each definition's range (0 where it adds no geometry), so the per-texel loop needs no managed lookups
+            float* rangeOf = stackalloc float[math.max(1, count)];
+            bool any = false;
+            for (int d = 0; d < count; d++)
+            {
+                rangeOf[d] = definitions[d].Push > 0f ? definitions[d].GeometryRange : 0f;
+                any |= rangeOf[d] > 0f;
+            }
             NativeArray<float> ranges = LeafDetailRange;
+            float* output = (float*)ranges.GetUnsafePtr() + tile * leaves * leaves;
+            if (!any)
+            {
+                UnsafeUtility.MemClear(output, leaves * leaves * sizeof(float));
+                return;
+            }
+            LeafRanges((ushort*)strata.GetUnsafeReadOnlyPtr(), Grid.SplatSamples, leaves, Grid.SplatResolution / leaves, rangeOf, count, output);
+        }
+
+        [BurstCompile]
+        private static unsafe void LeafRanges(ushort* strata, int splatSamples, int leaves, int texelsPerLeaf, float* rangeOf, int definitions, float* output)
+        {
             for (int lz = 0; lz < leaves; lz++)
             for (int lx = 0; lx < leaves; lx++)
             {
@@ -163,13 +186,11 @@ namespace Strata
                 for (int z = lz * texelsPerLeaf; z <= (lz + 1) * texelsPerLeaf; z++)
                 for (int x = lx * texelsPerLeaf; x <= (lx + 1) * texelsPerLeaf; x++)
                 {
-                    ushort value = strata[z * Grid.SplatSamples + x];
+                    ushort value = strata[z * splatSamples + x];
                     int definition = value >> 8;
-                    if ((value & 0xff) == 0 || definitions == null || definition >= definitions.Count) continue;
-                    StrataBandDefinition d = definitions[definition];
-                    if (d.Push > 0f) range = math.max(range, d.GeometryRange);
+                    if ((value & 0xff) != 0 && definition < definitions) range = math.max(range, rangeOf[definition]);
                 }
-                ranges[(tile * leaves + lz) * leaves + lx] = range;
+                output[lz * leaves + lx] = range;
             }
         }
 
@@ -198,14 +219,8 @@ namespace Strata
             UnityEngine.Object.DestroyImmediate(staging);
         }
 
-        private void Copy<T>(NativeArray<T> values, RenderTexture target, int slot, GraphicsFormat format) where T : struct
-        {
-            Texture2D staging = new(Grid.SplatSamples, Grid.SplatSamples, format, TextureCreationFlags.DontInitializePixels);
-            staging.SetPixelData(values, 0);
-            staging.Apply(false, false);
-            Graphics.CopyTexture(staging, 0, 0, target, slot, 0);
-            UnityEngine.Object.DestroyImmediate(staging);
-        }
+        private void Copy<T>(NativeArray<T> values, RenderTexture target, int slot, GraphicsFormat format) where T : struct =>
+            StrataSliceUpload.Copy(values, Grid.SplatSamples, format, target, slot);
 
         public void Dispose()
         {

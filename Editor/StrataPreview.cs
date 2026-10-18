@@ -36,7 +36,8 @@ namespace Strata.Editor
             public readonly Dictionary<StrataFeature, FeatureState> Features = new();
             public bool NeedsFull = true;
             public int PaletteVersion;
-            public int TreeSignature;
+            public int DensitySignature;
+            public int PlacementSignature;
             // tree density readbacks not yet stored, oldest first, with how many slices each has
             public readonly List<(int Tile, AsyncGPUReadbackRequest Request, int Slices)> PendingTrees = new();
         }
@@ -122,17 +123,31 @@ namespace Strata.Editor
                     world.RebuildPalette();
                     splatAll = true;
                 }
-                int treeSignature = StrataTreeEvaluator.Signature(nodes, world.Settings.TreeSeed);
+                int densitySignature = StrataTreeEvaluator.DensitySignature(nodes);
+                int placementSignature = StrataTreeEvaluator.PlacementSignature(nodes, world.Settings.TreeSeed);
                 List<StrataGrassPrototype> grass = StrataTreeEvaluator.GrassPrototypes(nodes);
                 if (!StrataTreeEvaluator.SameList(world.GrassPrototypes, grass))
                 {
                     world.SetGrassPrototypes(grass);
                     splatAll = true;
                 }
-                if (treeSignature != state.TreeSignature)
+                if (densitySignature != state.DensitySignature)
                 {
-                    state.TreeSignature = treeSignature;
+                    state.DensitySignature = densitySignature;
+                    state.PlacementSignature = placementSignature;
                     splatAll = true;
+                }
+                else if (placementSignature != state.PlacementSignature)
+                {
+                    state.PlacementSignature = placementSignature;
+                    // only species changed: the densities stand, so trees are placed again from them
+                    int slices = StrataTreeEvaluator.Slices(StrataTreeEvaluator.ScatteredForests(nodes).Count);
+                    if (state.PendingTrees.Count == 0 && Trees.HasDensities(world, slices))
+                    {
+                        Trees.Place(world, nodes, AllTiles(grid));
+                        SceneView.RepaintAll();
+                    }
+                    else splatAll = true;
                 }
                 PlacePendingTrees(world, state, nodes);
                 if (state.NeedsFull)

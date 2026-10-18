@@ -47,6 +47,10 @@ namespace Strata
         [SerializeField] private bool _castShadows = true;
         [Tooltip("Impostors cast shadows too (flat cards facing the light).")]
         [SerializeField] private bool _impostorShadows = true;
+        [Tooltip("How many of the last mesh LODs cast the impostor's shadow instead of their own (LOD 0 always casts its own). Far mesh LODs are costly to draw into the shadow map; the stand-in card is moved towards the light so the mesh behind it stays shaded.")]
+        [SerializeField, Range(0, MaxLods - 1)] private int _impostorShadowLods = 1;
+        [Tooltip("How far the card standing in for those mesh LODs' shadow moves towards the light, as a fraction of the tree's radius. Through the centre (0) it leaves the mesh's sunward half unshaded, so mid-range trees look too bright.")]
+        [SerializeField, Range(0f, 1f)] private float _impostorShadowPush = 0.25f;
 
         [Header("Collision")]
         [SerializeField] private bool _collider = true;
@@ -71,6 +75,8 @@ namespace Strata
         public float ImpostorBrightness => _impostorBrightness;
         public bool CastShadows => _castShadows;
         public bool ImpostorShadows => _impostorShadows;
+        public int ImpostorShadowLods => _impostorShadowLods;
+        public float ImpostorShadowPush => _impostorShadowPush;
         public bool HasCollider => _collider && (_colliderKind == StrataColliderKind.Capsule || _colliderMesh != null);
         public StrataColliderKind ColliderKind => _colliderKind;
         public Mesh ColliderMesh => _colliderMesh;

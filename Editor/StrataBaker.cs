@@ -11,9 +11,9 @@ namespace Strata.Editor
 {
     // Bakes a world: evaluates every feature over the whole world on the GPU (heights, then the moisture map, splats and
     // forest and grass densities), reads the heights back, places the trees, writes each tile to
-    // StreamingAssets/Strata/<world>/tile_x_z.bytes with the far file beside them (the whole world's heights and splats
-    // coarsely, and every CDLOD node's bounds), and points the world's StrataWorldData (beside its settings asset) at
-    // them. Returns a one-line report.
+    // StreamingAssets/Strata/<world>/tile_x_z.bytes (rewriting only tiles whose contents changed) with the far file
+    // beside them (the whole world's heights and splats coarsely, and every CDLOD node's bounds), and points the world's
+    // StrataWorldData (beside its settings asset) at them. Returns a one-line report.
     public static class StrataBaker
     {
         public static string Estimate(StrataGrid grid)
@@ -84,6 +84,7 @@ namespace Strata.Editor
             };
 
             long treeCount = 0;
+            int written = 0;
             for (int tz = 0; tz < grid.TilesZ; tz++)
             for (int tx = 0; tx < grid.TilesX; tx++)
             {
@@ -118,10 +119,10 @@ namespace Strata.Editor
                     far.SplatIndices[farIndex] = indices[z * grid.SplatSamples + x];
                     far.SplatWeights[farIndex] = weights[z * grid.SplatSamples + x];
                 }
-                StrataTileFile.Write(StrataWorldData.TilePath(dataFolder, tx, tz), grid.Samples,
+                if (StrataTileFile.Write(StrataWorldData.TilePath(dataFolder, tx, tz), grid.Samples,
                                      heightfield.Heights.Slice(tile * grid.SamplesPerTile, grid.SamplesPerTile),
                                      grid.SplatSamples, indices.Slice(), weights.Slice(), strataMap.Slice(), world.Trees[tile].Records,
-                                     grassPrototypes.Length, grass);
+                                     grassPrototypes.Length, grass)) written++;
                 grass.Dispose();
                 treeCount += world.Trees[tile].Records.Length;
             }
@@ -146,7 +147,7 @@ namespace Strata.Editor
             world.NotifyHeightsChanged();
 
             float mb = (grid.TileCount * StrataTileFile.Size(grid, 0, grassPrototypes.Length) + treeCount * 10L + farBytes) / (1024f * 1024f);
-            return $"Strata bake: {grid.TileCount} tiles ({grid}), {treeCount} trees of {prototypes.Length} prototypes, " +
+            return $"Strata bake: {grid.TileCount} tiles ({grid}; {written} changed), {treeCount} trees of {prototypes.Length} prototypes, " +
                    $"{grassPrototypes.Length} grass prototypes, {mb:0.#} MB, " +
                    $"{watch.Elapsed.TotalSeconds:0.00} s, to {tileFolder}";
         }

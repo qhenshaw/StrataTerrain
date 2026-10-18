@@ -64,6 +64,10 @@ namespace Strata
         private CameraState _current;
 
         public int Layer { get; set; }
+        // Off generates and draws nothing (for profiling what the grass costs).
+        public bool Enabled { get; set; } = true;
+        // Off still generates but draws nothing (profiling).
+        public bool DrawEnabled { get; set; } = true;
         public int TypeCount => _prototypes.Count;
 
         private struct GraphicsBufferIndirectArgs
@@ -156,7 +160,7 @@ namespace Strata
         private void OnBeginCameraRendering(ScriptableRenderContext context, Camera camera)
         {
             _current = null;
-            if (_types == null || _map == null || camera.cameraType != CameraType.Game && camera.cameraType != CameraType.SceneView) return;
+            if (!Enabled || _types == null || _map == null || camera.cameraType != CameraType.Game && camera.cameraType != CameraType.SceneView) return;
             if ((camera.cullingMask & (1 << Layer)) == 0) return;
             if (!_cameras.TryGetValue(camera, out CameraState state)) _cameras[camera] = state = CreateState();
             _current = state;
@@ -169,6 +173,7 @@ namespace Strata
             for (int i = 0; i < 6; i++) _planeVectors[i] = new Vector4(_planes[i].normal.x, _planes[i].normal.y, _planes[i].normal.z, _planes[i].distance);
 
             CommandBuffer cmd = CommandBufferPool.Get("Strata Grass");
+            cmd.BeginSample("Strata Grass");
             cmd.SetComputeVectorParam(_shader, "_StrataGrid", new Vector4(grid.Origin.x, grid.Origin.y, grid.TileSize, grid.TilesX));
             cmd.SetComputeVectorParam(_shader, "_StrataHeightParams", new Vector4(grid.MinHeight, grid.HeightRange, grid.Resolution, grid.Spacing));
             cmd.SetComputeVectorParam(_shader, "_GrassGrid", new Vector4(grid.TilesZ, grid.SplatResolution, _prototypes.Count, _argsTemplate.Length));
@@ -191,6 +196,7 @@ namespace Strata
             cmd.SetComputeBufferParam(_shader, _finish, "_Types", _types);
             cmd.SetComputeBufferParam(_shader, _finish, "_Args", state.Args);
             cmd.DispatchCompute(_shader, _finish, 1, 1, 1);
+            cmd.EndSample("Strata Grass");
             Graphics.ExecuteCommandBuffer(cmd);
             CommandBufferPool.Release(cmd);
 
@@ -243,7 +249,7 @@ namespace Strata
 
         private JobHandle OnPerformCulling(BatchRendererGroup group, BatchCullingContext context, BatchCullingOutput output, IntPtr userContext)
         {
-            if (context.viewType != BatchCullingViewType.Camera || _current == null || _draws.Count == 0) return default;
+            if (!DrawEnabled || context.viewType != BatchCullingViewType.Camera || _current == null || _draws.Count == 0) return default;
             if ((context.cullingLayerMask & (1u << Layer)) == 0 || output.drawCommands.Length == 0) return default;
             BatchCullingOutputDrawCommands* commands = (BatchCullingOutputDrawCommands*)output.drawCommands.GetUnsafePtr();
             *commands = default;

@@ -26,6 +26,8 @@ namespace Strata.Editor
             public StrataGrid Grid;
             public int Slices;
             public NativeArray<byte> Density;
+            public bool[] Stored;
+            public bool Complete => System.Array.TrueForAll(Stored, s => s);
         }
 
         private readonly Dictionary<StrataWorld, Cache> _caches = new();
@@ -71,14 +73,29 @@ namespace Strata.Editor
         }
 
         // Changes whenever anything that decides trees or grass, other than feature footprints and heights, changes.
-        public static int Signature(List<StrataEvaluator.Node> nodes, int seed)
+        // What the GPU density and grass passes read from the forests and meadows: when it changes, the splats (and
+        // with them the densities) are evaluated again.
+        public static int DensitySignature(List<StrataEvaluator.Node> nodes)
         {
-            int signature = seed;
-            foreach (StrataForest forest in AllForests(nodes)) signature = signature * 31 + forest.GetHashCode() * 17 + forest.Version;
+            int signature = 17;
+            foreach (StrataForest forest in AllForests(nodes)) signature = signature * 31 + forest.GetHashCode() * 17 + forest.DensityHash;
             foreach (StrataFeature feature in StrataEvaluator.Flatten(nodes))
                 if (feature is GrassScatter { Meadow: not null } grass) signature = signature * 31 + grass.Meadow.GetHashCode() * 13 + grass.Meadow.Version;
             return signature;
         }
+
+        // Everything else placement reads (species, prototypes, the world's tree seed): when only this changes, trees are
+        // placed again from the cached densities.
+        public static int PlacementSignature(List<StrataEvaluator.Node> nodes, int seed)
+        {
+            int signature = seed;
+            foreach (StrataForest forest in AllForests(nodes)) signature = signature * 31 + forest.GetHashCode() * 17 + forest.Version;
+            return signature;
+        }
+
+        // Whether every tile's densities are cached for this many slices.
+        public bool HasDensities(StrataWorld world, int slices) =>
+            _caches.TryGetValue(world, out Cache cache) && cache.Grid.Equals(world.Heightfield.Grid) && cache.Slices == slices && cache.Complete;
 
         public const int MaxGrassTypes = 8;
 
@@ -125,6 +142,7 @@ namespace Strata.Editor
                 NativeArray<byte> data = request.GetData<byte>(slice);
                 NativeArray<byte>.Copy(data, 0, cache.Density, StrataTreePlacer.CacheIndex(grid, slices, tile, slice), grid.SplatSamplesPerTile);
             }
+            cache.Stored[tile] = true;
         }
 
         private Cache CacheFor(StrataWorld world, int slices)
@@ -136,7 +154,8 @@ namespace Strata.Editor
             {
                 Grid = grid,
                 Slices = slices,
-                Density = new NativeArray<byte>(grid.TileCount * slices * grid.SplatSamplesPerTile, Allocator.Persistent)
+                Density = new NativeArray<byte>(grid.TileCount * slices * grid.SplatSamplesPerTile, Allocator.Persistent),
+                Stored = new bool[grid.TileCount]
             };
             _caches[world] = cache;
             return cache;

@@ -69,6 +69,8 @@ namespace Strata
         private NativeArray<float> _noDetail;
 
         public bool CastShadows { get; set; } = true;
+        // Off draws nothing (for profiling what the terrain costs).
+        public bool Enabled { get; set; } = true;
         // How long the last view took to cull, for the inspector.
         public double LastCullMilliseconds { get; private set; }
         // Patches (each 2048 triangles) the last camera view drew.
@@ -240,6 +242,7 @@ namespace Strata
 
         private JobHandle OnPerformCulling(BatchRendererGroup group, BatchCullingContext context, BatchCullingOutput output, IntPtr userContext)
         {
+            if (!Enabled) return default;
             bool shadow = context.viewType == BatchCullingViewType.Light;
             if (context.viewType != BatchCullingViewType.Camera && !shadow) return default;
             if (shadow && !CastShadows) return default;

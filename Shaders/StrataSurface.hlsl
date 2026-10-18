@@ -112,7 +112,8 @@ struct LayerSurface
     half4 mask;         // metallic, occlusion, height, smoothness
 };
 
-// A layer at one projection's uv: near tiling, far tiling, or a distance blend of both.
+// A layer at one projection's uv: near tiling, far tiling, or a distance blend of both. Only the near tiling samples
+// stochastically (three taps a map): far away the larger tiling already hides repeats.
 LayerSurface SampleProjection(int layer, float2 uv, float far, float4 data0, float4 data2)
 {
     int flags = (int)data0.w;
@@ -128,9 +129,10 @@ LayerSurface SampleProjection(int layer, float2 uv, float far, float4 data0, flo
         float amount = step == 0 ? 1.0 - far : far;
         if (amount <= 0.001) continue;
         float2 at = step == 0 ? nearUV : farUV;
-        half3 albedo = (flags & STRATA_HAS_ALBEDO) ? SampleMap(TEXTURE2D_ARRAY_ARGS(_StrataLayerAlbedo, sampler_StrataLayerAlbedo), at, layer, stochastic).rgb : 0.5;
-        half3 normal = (flags & STRATA_HAS_NORMAL) ? UnpackNormal(SampleMap(TEXTURE2D_ARRAY_ARGS(_StrataLayerNormal, sampler_StrataLayerAlbedo), at, layer, stochastic)) : half3(0, 0, 1);
-        half4 mask = (flags & STRATA_HAS_MASK) ? SampleMap(TEXTURE2D_ARRAY_ARGS(_StrataLayerMask, sampler_StrataLayerAlbedo), at, layer, stochastic) : half4(0, 1, 0.5, 0.2);
+        bool scatter = stochastic && step == 0;
+        half3 albedo = (flags & STRATA_HAS_ALBEDO) ? SampleMap(TEXTURE2D_ARRAY_ARGS(_StrataLayerAlbedo, sampler_StrataLayerAlbedo), at, layer, scatter).rgb : 0.5;
+        half3 normal = (flags & STRATA_HAS_NORMAL) ? UnpackNormal(SampleMap(TEXTURE2D_ARRAY_ARGS(_StrataLayerNormal, sampler_StrataLayerAlbedo), at, layer, scatter)) : half3(0, 0, 1);
+        half4 mask = (flags & STRATA_HAS_MASK) ? SampleMap(TEXTURE2D_ARRAY_ARGS(_StrataLayerMask, sampler_StrataLayerAlbedo), at, layer, scatter) : half4(0, 1, 0.5, 0.2);
         // metallic, height, emission, roughness to metallic, occlusion, height, smoothness
         if ((flags & (STRATA_HAS_MASK | STRATA_MASK_MHER)) == (STRATA_HAS_MASK | STRATA_MASK_MHER)) mask = half4(mask.r, 1.0, mask.g, 1.0 - mask.a);
         if (flags & STRATA_NORMAL_DIRECTX) normal.y = -normal.y;

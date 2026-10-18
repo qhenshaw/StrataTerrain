@@ -155,11 +155,7 @@ namespace Strata
 
         private void UploadSlot(int slot)
         {
-            Texture2D staging = new(Grid.Samples, Grid.Samples, GraphicsFormat.R16_UNorm, TextureCreationFlags.DontInitializePixels);
-            staging.SetPixelData(Heights, 0, slot * Grid.SamplesPerTile);
-            staging.Apply(false, false);
-            Graphics.CopyTexture(staging, 0, 0, Texture, slot, 0);
-            UnityEngine.Object.DestroyImmediate(staging);
+            StrataSliceUpload.Copy(Heights.GetSubArray(slot * Grid.SamplesPerTile, Grid.SamplesPerTile), Grid.Samples, GraphicsFormat.R16_UNorm, Texture, slot);
         }
 
         private void UploadFar()

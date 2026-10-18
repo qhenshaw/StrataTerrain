@@ -426,6 +426,7 @@ namespace Strata.Editor
                 target.Release();
                 Object.DestroyImmediate(target);
             }
+            Texture2D frameBounds = FrameBounds(albedo, $"{folder}/{prototype.name} Impostor Bounds.asset");
             Dilate(albedo, normals);
             Texture2D albedoAsset = Save(albedo, $"{folder}/{prototype.name} Impostor Albedo.png", true);
             Texture2D normalsAsset = Save(normals, $"{folder}/{prototype.name} Impostor Normals.png", false);
@@ -442,6 +443,7 @@ namespace Strata.Editor
             }
             material.SetTexture("_Albedo", albedoAsset);
             material.SetTexture("_Normals", normalsAsset);
+            material.SetTexture("_FrameBounds", frameBounds);
             material.SetFloat("_Frames", Frames);
             Vector4 bounds = new(centre.x, centre.y, centre.z, radius);
             material.SetVector("_ImpostorBounds", bounds);
@@ -490,6 +492,47 @@ namespace Strata.Editor
             RenderTexture.active = target;
             texture.ReadPixels(new Rect(0, 0, AtlasSize, AtlasSize), 0, 0, false);
             RenderTexture.active = previous;
+            return texture;
+        }
+
+        // Per frame, how far in from each edge (left, bottom, right, top, as fractions of the frame) the tree's coverage
+        // starts, less a pixel, in an 8-bit texture of one texel per frame (saved beside the prototype); the impostor
+        // shader shrinks its quad to it.
+        private static Texture2D FrameBounds(Texture2D albedo, string path)
+        {
+            Color32[] pixels = albedo.GetPixels32(0);
+            Color32[] insets = new Color32[Frames * Frames];
+            for (int fy = 0; fy < Frames; fy++)
+            for (int fx = 0; fx < Frames; fx++)
+            {
+                int minX = FrameSize, minY = FrameSize, maxX = -1, maxY = -1;
+                for (int y = 0; y < FrameSize; y++)
+                for (int x = 0; x < FrameSize; x++)
+                {
+                    if (pixels[(fy * FrameSize + y) * AtlasSize + fx * FrameSize + x].a == 0) continue;
+                    minX = Mathf.Min(minX, x);
+                    minY = Mathf.Min(minY, y);
+                    maxX = Mathf.Max(maxX, x);
+                    maxY = Mathf.Max(maxY, y);
+                }
+                if (maxX < 0)
+                {
+                    insets[fy * Frames + fx] = new Color32(0, 0, 0, 0);
+                    continue;
+                }
+                // a pixel of margin, and rounded outwards to the 8-bit steps
+                byte Inset(int pixelsIn) => (byte)Mathf.Clamp(Mathf.FloorToInt(Mathf.Max(0, pixelsIn - 1) / (float)FrameSize * 255f), 0, 255);
+                insets[fy * Frames + fx] = new Color32(Inset(minX), Inset(minY), Inset(FrameSize - 1 - maxX), Inset(FrameSize - 1 - maxY));
+            }
+            Texture2D texture = AssetDatabase.LoadAssetAtPath<Texture2D>(path);
+            bool created = texture == null;
+            if (created) texture = new Texture2D(Frames, Frames, TextureFormat.RGBA32, false, true);
+            texture.filterMode = FilterMode.Point;
+            texture.wrapMode = TextureWrapMode.Clamp;
+            texture.SetPixels32(insets);
+            texture.Apply(false, false);
+            if (created) AssetDatabase.CreateAsset(texture, path);
+            else EditorUtility.SetDirty(texture);
             return texture;
         }
 

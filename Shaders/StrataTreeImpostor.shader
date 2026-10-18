@@ -2,13 +2,17 @@
 // renders each prototype from a grid of directions over its upper hemisphere (laid out hemi-octahedrally) into two
 // atlases: albedo with coverage, and normals in the tree's own space with foliage. Here each tree shows the frame
 // nearest the direction it's seen from (in its own turned space) on a quad facing that way, lit with URP's PBR lighting
-// like Strata/Tree. Shadow passes pick the frame and face the quad by the light's direction instead.
+// like Strata/Tree. The quad is trimmed to the frame's silhouette (Frame Bounds, one texel per frame: how far in from
+// each edge the tree starts), so far fewer transparent pixels are shaded. Shadow passes pick the frame and face the
+// quad by the light's direction instead; Shadow Push moves that quad towards the light by a fraction of the tree's
+// radius, which StrataTreeRenderer uses when the quad casts a mesh LOD's shadow, so the mesh behind it stays shaded.
 Shader "Strata/TreeImpostor"
 {
     Properties
     {
         [NoScaleOffset] _Albedo ("Albedo (RGB) Coverage (A)", 2D) = "white" {}
         [NoScaleOffset] _Normals ("Normals (RGB) Foliage (A)", 2D) = "bump" {}
+        [NoScaleOffset] _FrameBounds ("Frame Bounds (inset left, bottom, right, top)", 2D) = "black" {}
         _Frames ("Frames Per Side", Float) = 8
         _ImpostorBounds ("Bounds (centre xyz, radius)", Vector) = (0, 5, 0, 6)
         _Cutoff ("Coverage Cutoff", Range(0, 1)) = 0.4
@@ -17,6 +21,7 @@ Shader "Strata/TreeImpostor"
         _HueVariation ("Hue Variation", Range(0, 0.5)) = 0.2
         _BrightnessVariation ("Brightness Variation", Range(0, 0.5)) = 0.12
         _Brightness ("Brightness", Range(0.2, 1.5)) = 1
+        [HideInInspector] _ShadowPush ("Shadow Push", Float) = 0
         [HideInInspector] _StrataTree ("Tree", Vector) = (0, 0, 0, 64)
     }
 
@@ -40,6 +45,7 @@ Shader "Strata/TreeImpostor"
             float _HueVariation;
             float _BrightnessVariation;
             float _Brightness;
+            float _ShadowPush;
         CBUFFER_END
 
         #include "StrataTreeCommon.hlsl"
@@ -48,6 +54,7 @@ Shader "Strata/TreeImpostor"
         SAMPLER(sampler_Albedo);
         TEXTURE2D(_Normals);
         SAMPLER(sampler_Normals);
+        TEXTURE2D(_FrameBounds);
 
         struct Attributes
         {
@@ -62,6 +69,7 @@ Shader "Strata/TreeImpostor"
             float3 origin;
             float2 sinCos;
             float fade;
+            float radius;
         };
 
         // toViewer: the direction from the tree to whatever looks at it (camera, or the light for shadows)
@@ -82,14 +90,18 @@ Shader "Strata/TreeImpostor"
             float3 right = normalize(cross(view, up));
             up = cross(-view, right);
             float radius = _ImpostorBounds.w * space.scale;
-            float3 offset = (right * input.positionOS.x + up * input.positionOS.y) * radius;
+            // the corner, moved in to the frame's silhouette
+            float4 inset = LOAD_TEXTURE2D_LOD(_FrameBounds, (int2)cell, 0);
+            float2 corner = lerp(inset.xy, 1.0 - inset.zw, input.positionOS.xy * 0.5 + 0.5);
+            float3 offset = (right * (corner.x * 2.0 - 1.0) + up * (corner.y * 2.0 - 1.0)) * radius;
 
             Impostor impostor;
             impostor.positionWS = centreWS + StrataRotateY(offset, space.sinCos);
-            impostor.uv = (cell + input.positionOS.xy * 0.5 + 0.5) / frames;
+            impostor.uv = (cell + corner) / frames;
             impostor.origin = space.origin;
             impostor.sinCos = space.sinCos;
             impostor.fade = space.fade;
+            impostor.radius = radius;
             return impostor;
         }
 
@@ -223,6 +235,7 @@ Shader "Strata/TreeImpostor"
                     Impostor impostor = PlaceImpostor(input, _LightDirection, false);
                     float3 lightDirectionWS = _LightDirection;
                 #endif
+                impostor.positionWS += lightDirectionWS * impostor.radius * _ShadowPush;
                 float4 positionCS = TransformWorldToHClip(ApplyShadowBias(impostor.positionWS, lightDirectionWS, lightDirectionWS));
                 #if UNITY_REVERSED_Z
                     positionCS.z = min(positionCS.z, UNITY_NEAR_CLIP_VALUE);
