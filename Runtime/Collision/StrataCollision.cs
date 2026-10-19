@@ -157,9 +157,10 @@ namespace Strata
             for (int i = 0; i < chunks.Count; i++)
             {
                 MeshCollider collider = colliders[i];
+                // activate first: a pooled collider given its previous mesh again while inactive comes back with none
+                collider.gameObject.SetActive(true);
                 collider.sharedMesh = null;
                 collider.sharedMesh = meshes[i];
-                collider.gameObject.SetActive(true);
                 _active[chunks[i]] = collider;
                 ChunkActivated?.Invoke(chunks[i], ChunkBounds(chunks[i]));
             }
