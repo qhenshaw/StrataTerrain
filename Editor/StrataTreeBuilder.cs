@@ -220,11 +220,7 @@ namespace Strata.Editor
                 material.SetFloat("_AlphaClip", clip ? 1f : 0f);
                 float cutoff = saved.Float(-1f, "_AlphaClipThreshold", "_Alpha_Clip_Threshold", "_AlphaCutoff", "_Cutoff");
                 material.SetFloat("_Cutoff", cutoff > 0f ? cutoff : 0.5f);
-                // SpeedTree keeps smoothness in its extra map (its _Smoothness is a multiplier); a mask map (HDRP) scales it
-                // down, which a constant can only approximate
-                float smoothness = saved.Texture("_ExtraTex") != null ? -1f : saved.Float(-1f, "_Smoothness", "_Glossiness");
-                if (smoothness >= 0f) smoothness *= saved.Float(1f, "_SmoothnessRemapMax") * (saved.Texture("_MaskMap") != null ? 0.6f : 1f);
-                material.SetFloat("_Smoothness", smoothness >= 0f ? Mathf.Min(smoothness, 0.6f) : foliage ? 0.25f : 0.1f);
+                SetSmoothness(material, saved, foliage);
                 material.SetFloat("_Cull", twoSided ? (float)CullMode.Off : (float)CullMode.Back);
                 material.SetFloat("_FoliageSource", 0f);
                 material.SetFloat("_Foliage", foliage ? 1f : 0f);
@@ -238,8 +234,58 @@ namespace Strata.Editor
             return material;
         }
 
-        // The mean linear colour of a texture's opaque texels (alpha over a half), from a small blit read back.
-        private static Color MeanColour(Texture2D texture)
+        // Smoothness from the source's map where it has one, with alpha as smoothness: SpeedTree's extra map (its
+        // _Glossiness scales it) and HDRP's mask map (remapped by its range); an MHER mask's alpha is roughness. Without
+        // a map, the source's constant, capped, or a guess.
+        private static void SetSmoothness(Material material, Saved saved, bool foliage)
+        {
+            Texture extra = saved.Texture("_ExtraTex");
+            Texture mask = saved.Texture("_MaskMap");
+            Texture mher = saved.Texture("_Mask");
+            Texture map = extra ?? mask ?? mher;
+            material.SetTexture("_MaskMap", map);
+            if (extra != null)
+            {
+                material.SetFloat("_SmoothnessSource", 1f);
+                material.SetVector("_SmoothnessRemap", new Vector4(0f, Mathf.Min(saved.Float(1f, "_Glossiness"), 0.8f), 0f, 0f));
+            }
+            else if (mask != null)
+            {
+                // the range tops out at the material's own smoothness too: Shader Graph copies keep stale remap fields
+                float min = saved.Float(0f, "_SmoothnessRemapMin");
+                float max = Mathf.Min(saved.Float(1f, "_SmoothnessRemapMax"), saved.Float(1f, "_Smoothness"));
+                material.SetFloat("_SmoothnessSource", max > min + 0.01f ? 1f : 0f);
+                material.SetVector("_SmoothnessRemap", new Vector4(min, Mathf.Max(min, max), 0f, 0f));
+                if (max <= min + 0.01f)
+                {
+                    material.SetTexture("_MaskMap", null);
+                    material.SetFloat("_Smoothness", min);
+                    return;
+                }
+            }
+            else if (mher != null)
+            {
+                material.SetFloat("_SmoothnessSource", 2f);
+                material.SetVector("_SmoothnessRemap", new Vector4(0f, 1f, 0f, 0f));
+            }
+            else material.SetFloat("_SmoothnessSource", 0f);
+            float smoothness = saved.Float(-1f, "_Smoothness", "_Glossiness");
+            material.SetFloat("_Smoothness", map != null ? MeanSmoothness(material) : smoothness >= 0f ? Mathf.Min(smoothness, 0.6f) : foliage ? 0.25f : 0.1f);
+        }
+
+        // A Strata/Tree material's average smoothness (what an impostor of it uses).
+        private static float MeanSmoothness(Material material)
+        {
+            float source = material.GetFloat("_SmoothnessSource");
+            if (source < 0.5f || material.GetTexture("_MaskMap") is not Texture2D map) return material.GetFloat("_Smoothness");
+            float alpha = MeanColour(map, false).a;
+            Vector4 range = material.GetVector("_SmoothnessRemap");
+            return Mathf.Lerp(range.x, range.y, source > 1.5f ? 1f - alpha : alpha);
+        }
+
+        // The mean linear colour of a texture's opaque texels (alpha over a half; or all of them), from a small blit
+        // read back.
+        private static Color MeanColour(Texture2D texture, bool opaqueOnly = true)
         {
             if (texture == null) return Color.gray;
             RenderTexture target = RenderTexture.GetTemporary(64, 64, 0, RenderTextureFormat.ARGB32, RenderTextureReadWrite.Linear);
@@ -253,7 +299,7 @@ namespace Strata.Editor
             Color sum = Color.clear;
             int count = 0;
             foreach (Color pixel in read.GetPixels())
-                if (pixel.a > 0.5f)
+                if (!opaqueOnly || pixel.a > 0.5f)
                 {
                     sum += pixel;
                     count++;
@@ -449,8 +495,9 @@ namespace Strata.Editor
             material.SetVector("_ImpostorBounds", bounds);
             // lighting and tint like the mesh's foliage
             Material foliage = System.Array.Find(lod.Materials, m => m != null && (m.GetFloat("_FoliageSource") > 0.5f || m.GetFloat("_Foliage") > 0.5f)) ?? lod.Materials[0];
-            foreach (string name in new[] { "_Translucency", "_HueVariation", "_BrightnessVariation", "_Smoothness" })
+            foreach (string name in new[] { "_Translucency", "_HueVariation", "_BrightnessVariation" })
                 material.SetFloat(name, foliage.GetFloat(name));
+            material.SetFloat("_Smoothness", MeanSmoothness(foliage));
             material.SetFloat("_Brightness", prototype.ImpostorBrightness);
             EditorUtility.SetDirty(material);
             prototype.SetImpostor(material, bounds);

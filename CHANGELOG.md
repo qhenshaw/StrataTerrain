@@ -12,6 +12,10 @@ and from 11.2 to 9.0 ms at ground level.
   of the tree's radius), so the mesh keeps shading itself (through the centre it lit the mesh's whole sunward half, a
   too-bright band at mid range).
 - Edits to a tree prototype reach the tree renderer straight away.
+- Strata/Tree can take smoothness from a map's alpha (Smoothness From, Smoothness Map, Smoothness Range): the tree
+  builder uses SpeedTree's extra map, HDRP's mask map (its remap range, capped at the material's Smoothness, since
+  Shader Graph copies keep stale remap fields) or an MHER mask (alpha as roughness), and impostors take the map's
+  average.
 - Grass thins out past 30% of its range, with the remaining clumps growing to keep the ground covered (about a third
   fewer clumps drawn).
 - The terrain samples only the near tiling stochastically (the far tiling hides repeats on its own).

@@ -4,7 +4,9 @@
 // per-tree hue and brightness shift on foliage; foliage also lets light through. Wind moves vertices by their weight
 // (vertex alpha, or height up the tree). Grass can take the colour of the terrain it stands on (from the world's splats):
 // Ground Multiply colours a greyscale texture by it (the scale is one over the texture's mean, so it ends up about as
-// bright as the ground), and Ground Tint blends the lower part of a coloured texture towards it. Lit with URP's PBR lighting. The two impostor bake passes render the tree
+// bright as the ground), and Ground Tint blends the lower part of a coloured texture towards it. Smoothness is a
+// constant or comes from a map's alpha (SpeedTree extra map, HDRP mask map; or roughness, for MHER masks) remapped into
+// a range. Lit with URP's PBR lighting. The two impostor bake passes render the tree
 // unlit into StrataTreeImpostor's frames (albedo and coverage; normals in the tree's own space and foliage).
 Shader "Strata/Tree"
 {
@@ -19,6 +21,9 @@ Shader "Strata/Tree"
         [Normal] _BumpMap ("Normal Map", 2D) = "bump" {}
         _BumpScale ("Normal Strength", Range(0, 2)) = 1
         _Smoothness ("Smoothness", Range(0, 1)) = 0.2
+        [Enum(Constant, 0, Map Alpha, 1, Map Alpha Is Roughness, 2)] _SmoothnessSource ("Smoothness From", Float) = 0
+        [NoScaleOffset] _MaskMap ("Smoothness Map", 2D) = "white" {}
+        _SmoothnessRemap ("Smoothness Range (min, max)", Vector) = (0, 1, 0, 0)
         [Enum(UnityEngine.Rendering.CullMode)] _Cull ("Cull", Float) = 2
         [Header(Foliage)]
         [Enum(Constant, 0, UV0 X, 1)] _FoliageSource ("Foliage From", Float) = 0
@@ -60,6 +65,8 @@ Shader "Strata/Tree"
             float _Cutoff;
             float _BumpScale;
             float _Smoothness;
+            float _SmoothnessSource;
+            float4 _SmoothnessRemap;
             float _Cull;
             float _FoliageSource;
             float _Foliage;
@@ -82,6 +89,7 @@ Shader "Strata/Tree"
 
         TEXTURE2D(_BaseMap);
         SAMPLER(sampler_BaseMap);
+        TEXTURE2D(_MaskMap);
         TEXTURE2D(_BumpMap);
         SAMPLER(sampler_BumpMap);
 
@@ -224,6 +232,11 @@ Shader "Strata/Tree"
                 SurfaceData surfaceData = (SurfaceData)0;
                 surfaceData.albedo = albedo.rgb;
                 surfaceData.smoothness = _Smoothness;
+                if (_SmoothnessSource > 0.5)
+                {
+                    half mask = SAMPLE_TEXTURE2D(_MaskMap, sampler_BaseMap, input.uv * _BaseMap_ST.xy + _BaseMap_ST.zw).a;
+                    surfaceData.smoothness = lerp(_SmoothnessRemap.x, _SmoothnessRemap.y, _SmoothnessSource > 1.5 ? 1.0 - mask : mask);
+                }
                 surfaceData.occlusion = _VertexOcclusion > 0.5 ? input.colour.r : 1.0;
                 surfaceData.normalTS = half3(0, 0, 1);
                 surfaceData.alpha = 1.0;
