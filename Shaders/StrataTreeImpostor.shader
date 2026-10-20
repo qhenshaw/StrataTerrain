@@ -126,7 +126,9 @@ Shader "Strata/TreeImpostor"
             #pragma multi_compile_fragment _ _SHADOWS_SOFT _SHADOWS_SOFT_LOW _SHADOWS_SOFT_MEDIUM _SHADOWS_SOFT_HIGH
             #pragma multi_compile_fragment _ _SCREEN_SPACE_OCCLUSION
 
+            #include_with_pragmas "Packages/com.unity.render-pipelines.universal/ShaderLibrary/ProbeVolumeVariants.hlsl"
             #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Lighting.hlsl"
+            #include "StrataGI.hlsl"
 
             struct Varyings
             {
@@ -177,7 +179,7 @@ Shader "Strata/TreeImpostor"
                     inputData.shadowCoord = TransformWorldToShadowCoord(input.positionWS);
                 #endif
                 inputData.fogCoord = input.fogFactor;
-                inputData.bakedGI = SampleSH(normalWS);
+                inputData.bakedGI = StrataBakedGI(inputData.positionWS, inputData.normalWS, inputData.viewDirectionWS, input.positionCS);
                 inputData.normalizedScreenSpaceUV = GetNormalizedScreenSpaceUV(input.positionCS);
                 inputData.shadowMask = 1;
 

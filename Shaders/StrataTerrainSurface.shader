@@ -68,7 +68,9 @@ Shader "Strata/TerrainSurface"
             #pragma multi_compile _ _LIGHT_LAYERS
             #pragma multi_compile _ _CLUSTER_LIGHT_LOOP
 
+            #include_with_pragmas "Packages/com.unity.render-pipelines.universal/ShaderLibrary/ProbeVolumeVariants.hlsl"
             #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Lighting.hlsl"
+            #include "StrataGI.hlsl"
             #include "StrataSurface.hlsl"
 
             struct Varyings
@@ -116,7 +118,7 @@ Shader "Strata/TerrainSurface"
                     inputData.shadowCoord = TransformWorldToShadowCoord(input.positionWS);
                 #endif
                 inputData.fogCoord = input.fogFactor;
-                inputData.bakedGI = SampleSH(surface.normalWS);
+                inputData.bakedGI = StrataBakedGI(inputData.positionWS, inputData.normalWS, inputData.viewDirectionWS, input.positionCS);
                 inputData.normalizedScreenSpaceUV = GetNormalizedScreenSpaceUV(input.positionCS);
                 inputData.shadowMask = 1;
 

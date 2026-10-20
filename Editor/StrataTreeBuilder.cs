@@ -285,7 +285,7 @@ namespace Strata.Editor
 
         // The mean linear colour of a texture's opaque texels (alpha over a half; or all of them), from a small blit
         // read back.
-        private static Color MeanColour(Texture2D texture, bool opaqueOnly = true)
+        internal static Color MeanColour(Texture2D texture, bool opaqueOnly = true)
         {
             if (texture == null) return Color.gray;
             RenderTexture target = RenderTexture.GetTemporary(64, 64, 0, RenderTextureFormat.ARGB32, RenderTextureReadWrite.Linear);

@@ -46,6 +46,12 @@ namespace Strata.Editor
             {
                 if (GUILayout.Button("Bake")) Debug.Log(StrataBaker.Bake(world), world);
                 if (GUILayout.Button("Re-evaluate All")) StrataPreview.RefreshAll();
+                using (new EditorGUILayout.HorizontalScope())
+                using (new EditorGUI.DisabledScope(StrataProbeBaker.IsBaking))
+                {
+                    if (GUILayout.Button("Bake Probes")) Debug.Log(StrataProbeBaker.Bake(world), world);
+                    if (GUILayout.Button("Clear Probes")) Debug.Log(StrataProbeBaker.Clear(world), world);
+                }
             }
         }
     }

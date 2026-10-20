@@ -63,6 +63,11 @@ namespace Strata
         [SerializeField, Min(0f)] private float _collisionRadius = 192f;
         [SerializeField] private int _collisionLayer;
 
+        [Header("Probes")]
+        [Tooltip("The closest baked light probes get (near the terrain and trees), in metres; the farthest is 27 times this. " +
+                 "Closer is costlier: per square kilometre, 9 m baked about 6.7 MB of cell data and 27 m about 1 MB.")]
+        [SerializeField, Min(1f)] private float _probeMinSpacing = 9f;
+
         public StrataGrid Grid => new()
         {
             Origin = _origin,
@@ -89,6 +94,7 @@ namespace Strata
         public float CollisionChunkSize => _collisionChunkSize;
         public float CollisionRadius => _collisionRadius;
         public int CollisionLayer => _collisionLayer;
+        public float ProbeMinSpacing => _probeMinSpacing;
 
         private void OnValidate()
         {
