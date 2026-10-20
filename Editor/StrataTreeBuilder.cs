@@ -10,10 +10,11 @@ namespace Strata.Editor
     // a single LOD), leaving out billboard LODs (Strata bakes its own impostor): each LOD's mesh is used as it is when one
     // untransformed renderer draws it, otherwise its renderers are combined into a mesh saved beside the prototype; every
     // source material gets a Strata/Tree copy in a Materials folder beside the prototype, read from the material's saved
-    // properties so materials whose shader is missing (HDRP, SpeedTree) still convert; LOD distances come from the
-    // LODGroup's transitions at a 60 degree view, with the last mesh LOD reaching MeshDistance; every material of a
+    // properties so materials whose shader is missing (HDRP, SpeedTree, Amplify) still convert; LOD distances come from
+    // the LODGroup's transitions at a 60 degree view, with the last mesh LOD reaching MeshDistance; every material of a
     // prototype sways together with one wind (none without foliage, as for rocks); the collider comes from a
-    // CapsuleCollider or BoxCollider (as a trunk capsule) or MeshCollider on the prefab. BakeImpostor renders LOD0 from
+    // CapsuleCollider or BoxCollider (as a trunk capsule) or MeshCollider on the prefab, and a prototype without one
+    // that doesn't sway (a rock) collides with its LOD0 mesh. BakeImpostor renders LOD0 from
     // Frames x Frames directions over the upper hemisphere into albedo and normal atlases and makes the
     // Strata/TreeImpostor material.
     public static class StrataTreeBuilder
@@ -120,6 +121,12 @@ namespace Strata.Editor
                 prototype.SetMeshCollider(meshCollider.sharedMesh);
                 collider = "mesh collider";
             }
+            else if (!swaying && lods.Length > 0)
+            {
+                // rocks and other solid shapes collide with their own first LOD
+                prototype.SetMeshCollider(lods[0].Mesh);
+                collider = "mesh collider from LOD0";
+            }
             else
             {
                 prototype.SetCollider(false, prototype.ColliderRadius, prototype.ColliderHeight);
@@ -210,7 +217,7 @@ namespace Strata.Editor
             {
                 // textured (URP Lit, HDRP Lit, SpeedTree): foliage is whatever carries a subsurface or thickness map
                 material.SetFloat("_VertexColour", 0f);
-                material.SetTexture("_BaseMap", saved.Texture("_BaseMap", "_MainTex", "_BaseColorMap"));
+                material.SetTexture("_BaseMap", saved.Texture("_BaseMap", "_MainTex", "_BaseColorMap", "_Albedo"));
                 material.SetColor("_BaseColor", saved.Colour(Color.white, "_BaseColor", "_Color"));
                 material.SetTexture("_BumpMap", saved.Texture("_BumpMap", "_NormalMap", "_Normal"));
                 bool clip = saved.Keyword("_ALPHATEST_ON") || saved.Float(0f, "_AlphaClip", "_AlphaCutoffEnable") > 0.5f ||
@@ -267,6 +274,16 @@ namespace Strata.Editor
             {
                 material.SetFloat("_SmoothnessSource", 2f);
                 material.SetVector("_SmoothnessRemap", new Vector4(0f, 1f, 0f, 0f));
+            }
+            else if (saved.Texture("_SmoothnessMap") is Texture2D amplify)
+            {
+                // Amplify's greyscale gloss map (or roughness, by its name; its _SmoothRough flag isn't reliable), as
+                // a constant: its mean times the material's _Snoothness (sic)
+                material.SetFloat("_SmoothnessSource", 0f);
+                float mean = MeanColour(amplify, false).r;
+                if (amplify.name.ToLowerInvariant().Contains("rough")) mean = 1f - mean;
+                material.SetFloat("_Smoothness", Mathf.Min(mean * saved.Float(1f, "_Snoothness"), 0.6f));
+                return;
             }
             else material.SetFloat("_SmoothnessSource", 0f);
             float smoothness = saved.Float(-1f, "_Smoothness", "_Glossiness");
