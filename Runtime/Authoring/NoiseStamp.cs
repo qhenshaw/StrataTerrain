@@ -13,7 +13,7 @@ namespace Strata
     // with faded edges like a texture stamp; unbounded, it covers the whole world, which makes it the usual first
     // feature (the base terrain). Position offsets the noise for Max, Min and Set, as with texture stamps.
     [AddComponentMenu("Strata/Noise Stamp")]
-    public class NoiseStamp : StrataFeature
+    public class NoiseStamp : StrataInlineFeature
     {
         [SerializeField] private StrataNoise _noise = StrataNoise.Fbm;
         [SerializeField] private bool _unbounded;

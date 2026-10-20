@@ -1,19 +1,22 @@
+using System;
 using System.Collections.Generic;
 using UnityEngine;
 
 namespace Strata
 {
-    // The ordered list of layers a world paints with. The first layer is the base everywhere nothing else paints; the
-    // Auto Splat feature then applies each later layer's rule in order, each painting over those before it. Splats
-    // store indices into this list, so reordering or removing layers needs a re-bake.
-    [CreateAssetMenu(menuName = "Strata/Palette", fileName = "StrataPalette")]
-    public class StrataPalette : ScriptableObject
+    // The ordered list of layers a world paints with, as a block on its StrataWorld. The first layer is the base
+    // everywhere nothing else paints; the Auto Splat feature then applies each later layer's rule in order, each
+    // painting over those before it. Splats store indices into this list, so reordering or removing layers needs a
+    // re-bake.
+    [Serializable]
+    public class StrataPalette
     {
         public const int MaxLayers = 64;
 
         [SerializeField] private List<StrataLayer> _layers = new();
 
         public IReadOnlyList<StrataLayer> Layers => _layers;
+        public bool IsEmpty => _layers.Count == 0;
         private int _version;
 
         // Changes whenever the list or any layer in it changes.
@@ -36,7 +39,8 @@ namespace Strata
             _version++;
         }
 
-        private void OnValidate()
+        // Called by the StrataWorld when it is edited.
+        public void Validate()
         {
             if (_layers.Count > MaxLayers) _layers.RemoveRange(MaxLayers, _layers.Count - MaxLayers);
             _version++;

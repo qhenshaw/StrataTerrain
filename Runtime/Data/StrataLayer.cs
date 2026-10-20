@@ -62,8 +62,8 @@ namespace Strata
 
     // One terrain material: albedo, a normal map (OpenGL-style, or DirectX with its green flipped) and a mask map in one
     // of the StrataMaskLayout channel orders, tiled every Tile Size metres, plus its automatic placement rule. Layers are listed in a
-    // StrataPalette; all of a palette's textures of one kind must share size and format so they can be packed into
-    // texture arrays (the palette's inspector can fix the import settings).
+    // world's palette; all of a palette's textures of one kind must share size and format so they can be packed into
+    // texture arrays (the StrataWorld inspector can fix the import settings).
     [CreateAssetMenu(menuName = "Strata/Layer", fileName = "StrataLayer")]
     public class StrataLayer : ScriptableObject
     {

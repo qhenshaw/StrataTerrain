@@ -59,7 +59,7 @@ namespace Strata
         {
             layer = null;
             weight = 0f;
-            if (!TryGetWorld(position, out StrataWorld world) || world.Settings.Palette == null || world.Splatmap == null) return false;
+            if (!TryGetWorld(position, out StrataWorld world) || world.Palette.IsEmpty || world.Splatmap == null) return false;
             StrataGrid grid = world.Heightfield.Grid;
             StrataSplatmap splats = world.Splatmap;
             float2 relative = (new float2(position.x, position.z) - grid.Origin) / grid.TileSize;
@@ -84,8 +84,8 @@ namespace Strata
             for (int i = 1; i < 4; i++)
                 if (((weights >> (i * 8)) & 0xff) > ((weights >> (best * 8)) & 0xff)) best = i;
             int layerIndex = (int)((indices >> (best * 8)) & 0xff);
-            if (layerIndex >= world.Settings.Palette.Layers.Count) return false;
-            layer = world.Settings.Palette.Layers[layerIndex];
+            if (layerIndex >= world.Palette.Layers.Count) return false;
+            layer = world.Palette.Layers[layerIndex];
             weight = ((weights >> (best * 8)) & 0xff) / 255f;
             return true;
         }

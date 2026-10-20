@@ -43,11 +43,11 @@ namespace Strata
     }
 
     // A biome of trees: where it grows (height, slope, moisture, the terrain layers under it, and noise for clearings),
-    // how densely, and which species it mixes. A Tree Scatter feature places a forest over the world or a footprint;
-    // several forests can share a world. Density is the fraction of full stocking: 1 packs each species as closely as
-    // its spacing allows.
-    [CreateAssetMenu(menuName = "Strata/Forest", fileName = "StrataForest")]
-    public class StrataForest : ScriptableObject
+    // how densely, and which species it mixes. It is a block on a Tree Scatter, which places it over the world or a
+    // footprint; several Tree Scatters (forests) can share a world. Density is the fraction of full stocking: 1 packs
+    // each species as closely as its spacing allows.
+    [Serializable]
+    public class StrataForest
     {
         [SerializeField, Range(0f, 1f)] private float _density = 0.7f;
         [SerializeField] private StrataRange _height = new(0f, 1000f, 20f) { Enabled = true };
@@ -65,8 +65,11 @@ namespace Strata
         [Tooltip("Size of the single-species stands, in metres.")]
         [SerializeField, Min(5f)] private float _patchSize = 120f;
         [SerializeField] private List<StrataTreeSpecies> _species = new();
+        [Tooltip("A layer painted under the forest by its density (a forest floor).")]
+        [SerializeField] private StrataPaint _floorPaint = StrataPaint.Default;
 
         public float Density => _density;
+        public StrataPaint FloorPaint => _floorPaint;
         public StrataRange Height => _height;
         public StrataRange Slope => _slope;
         public StrataRange Moisture => _moisture;
@@ -118,6 +121,7 @@ namespace Strata
             _version++;
         }
 
-        private void OnValidate() => _version++;
+        // Called by the owning Tree Scatter when it is edited.
+        internal void Touch() => _version++;
     }
 }

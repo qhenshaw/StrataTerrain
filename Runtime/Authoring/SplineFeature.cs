@@ -10,19 +10,19 @@ namespace Strata
     {
         // flattens to the spline's height
         Road,
-        // carves a channel below the spline's height, shaped by the profile
+        // carves a channel below the spline's height, shaped by the cross section
         River,
-        // raises a ridge above the spline's height, shaped by the profile
+        // raises a ridge above the spline's height, shaped by the cross section
         Ridge
     }
 
     // Shapes the terrain along the splines of a SplineContainer on the same object. Within half the width of the spline
-    // the terrain is pulled to the spline's height (plus the profile for rivers and ridges); beyond that it eases back to
-    // the terrain over the falloff distance, shaped by the falloff curve. Width, falloff and strength can be scaled per
-    // point along the spline with the knot data lists. Add and Subtract use only the profile offset, so an Add ridge
-    // follows the ground instead of the spline's height.
+    // the terrain is pulled to the spline's height (plus the cross section for rivers and ridges); beyond that it eases
+    // back to the terrain over the falloff distance, shaped by the falloff curve. Width, falloff and strength can be
+    // scaled per point along the spline with the knot data lists. Add and Subtract use only the cross section offset, so
+    // an Add ridge follows the ground instead of the spline's height.
     [AddComponentMenu("Strata/Spline Feature"), RequireComponent(typeof(SplineContainer))]
-    public class SplineFeature : StrataFeature
+    public class SplineFeature : StrataInlineFeature
     {
         // A sample along a spline: world position, then width, falloff, strength and 1 if a segment starts here.
         public struct Point
@@ -38,7 +38,7 @@ namespace Strata
         [Tooltip("River depth or ridge height at the centre, in metres.")]
         [SerializeField] private float _depth = 6f;
         [Tooltip("Cross section from the centre (0) to the edge of the width (1): 1 is full depth or height.")]
-        [SerializeField] private AnimationCurve _profile = AnimationCurve.EaseInOut(0f, 1f, 1f, 0f);
+        [SerializeField] private AnimationCurve _crossSection = AnimationCurve.EaseInOut(0f, 1f, 1f, 0f);
         [SerializeField] private SplineData<float> _knotWidth = new() { DefaultValue = 1f };
         [SerializeField] private SplineData<float> _knotFalloff = new() { DefaultValue = 1f };
         [SerializeField] private SplineData<float> _knotStrength = new() { DefaultValue = 1f };
@@ -54,7 +54,7 @@ namespace Strata
         public StrataSplineMode Mode => _mode;
         public float Depth => _depth;
         public AnimationCurve FalloffCurve => _falloffCurve;
-        public AnimationCurve Profile => _profile;
+        public AnimationCurve CrossSection => _crossSection;
 
         public override Rect Bounds
         {
@@ -77,12 +77,7 @@ namespace Strata
 
         private SplineContainer Container => _container != null ? _container : _container = GetComponent<SplineContainer>();
 
-        private void Reset()
-        {
-            _blend = StrataBlend.Set;
-            _mask.UseHeight = false;
-            _mask.UseSlope = false;
-        }
+        private void Reset() => _blend = StrataBlend.Set;
 
         private void OnEnable() => Spline.Changed += OnSplineChanged;
         private void OnDisable() => Spline.Changed -= OnSplineChanged;

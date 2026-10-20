@@ -13,7 +13,7 @@ namespace Strata.Editor
     // forest and grass densities), reads the heights back, places the trees, writes each tile to
     // StreamingAssets/Strata/<world>/tile_x_z.bytes (rewriting only tiles whose contents changed) with the far file
     // beside them (the whole world's heights and splats coarsely, and every CDLOD node's bounds), and points the world's
-    // StrataWorldData (beside its settings asset) at them. Returns a one-line report.
+    // Baked Data block at them, which dirties the scene. Returns a one-line report.
     public static class StrataBaker
     {
         public static string Estimate(StrataGrid grid)
@@ -26,7 +26,7 @@ namespace Strata.Editor
 
         public static string Bake(StrataWorld world)
         {
-            if (world.Settings == null || world.Heightfield == null) return "Strata bake: the world has no valid settings.";
+            if (world.Heightfield == null) return "Strata bake: the world has no valid settings.";
             Stopwatch watch = Stopwatch.StartNew();
             StrataHeightfield heightfield = world.Heightfield;
             StrataGrid grid = heightfield.Grid;
@@ -68,8 +68,6 @@ namespace Strata.Editor
             }
             else world.Trees.Clear();
 
-            string settingsPath = AssetDatabase.GetAssetPath(world.Settings);
-            string folder = Path.GetDirectoryName(settingsPath)!.Replace('\\', '/');
             string dataFolder = $"Strata/{world.name}";
             string tileFolder = StrataWorldData.FolderPath(dataFolder);
             Directory.CreateDirectory(tileFolder);
@@ -132,24 +130,16 @@ namespace Strata.Editor
             far.Dispose();
             AssetDatabase.Refresh();
 
-            StrataWorldData data = world.Data;
-            if (data == null)
-            {
-                data = ScriptableObject.CreateInstance<StrataWorldData>();
-                AssetDatabase.CreateAsset(data, $"{folder}/{world.name} Data.asset");
-                Undo.RecordObject(world, "Bake Strata World");
-                world.Data = data;
-                EditorSceneManager.MarkSceneDirty(world.gameObject.scene);
-            }
-            data.Set(grid, dataFolder, strata, prototypes, grassPrototypes);
-            EditorUtility.SetDirty(data);
-            AssetDatabase.SaveAssetIfDirty(data);
+            Undo.RecordObject(world, "Bake Strata World");
+            world.Data.Set(grid, dataFolder, strata, prototypes, grassPrototypes);
+            EditorUtility.SetDirty(world);
+            EditorSceneManager.MarkSceneDirty(world.gameObject.scene);
             world.NotifyHeightsChanged();
 
             float mb = (grid.TileCount * StrataTileFile.Size(grid, 0, grassPrototypes.Length) + treeCount * 10L + farBytes) / (1024f * 1024f);
             return $"Strata bake: {grid.TileCount} tiles ({grid}; {written} changed), {treeCount} trees of {prototypes.Length} prototypes, " +
                    $"{grassPrototypes.Length} grass prototypes, {mb:0.#} MB, " +
-                   $"{watch.Elapsed.TotalSeconds:0.00} s, to {tileFolder}";
+                   $"{watch.Elapsed.TotalSeconds:0.00} s, to {tileFolder}; save the scene to keep the baked data";
         }
     }
 }

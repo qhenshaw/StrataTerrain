@@ -22,6 +22,7 @@
 #pragma kernel TreeInit
 #pragma kernel TreeScatter
 #pragma kernel TreeEffect
+#pragma kernel TreePlant
 #pragma kernel TreeWrite
 #pragma kernel GrassInit
 #pragma kernel GrassScatter
@@ -481,7 +482,8 @@ void PaintFeature(uint3 id : SV_DispatchThreadID)
 
 // Trees: one slice of _TreeState per forest, then one for what effects on every forest leave (for planted trees). A
 // Tree Scatter blends its forest's density in by its weight (and with Replace, takes its weight away from the other
-// forests); a tree effect multiplies one slice, or all and the last, by its density where it acts. TreeWrite stores
+// forests); a tree effect multiplies one slice, or all and the last, by its density where it acts, and Plant on an
+// area feature raises its forest's slice where it acts (TreePlant). TreeWrite stores
 // them as bytes, with moisture after them, for the CPU to place trees from.
 RWTexture2DArray<float> _TreeState;
 RWTexture2DArray<float> _TreeOut;
@@ -535,6 +537,21 @@ void TreeEffect(uint3 id : SV_DispatchThreadID)
         _TreeState[uint3(id.xy, _TreeSlices)] *= multiplier;
         for (int g = 0; g < _GrassSlices; g++) _GrassState[uint3(id.xy, g)] *= multiplier;
     }
+}
+
+// Plant on an area feature: its forest grows where the feature acts, at the forest's rule density times the
+// feature's influence, added over what the slice already holds.
+[numthreads(8, 8, 1)]
+void TreePlant(uint3 id : SV_DispatchThreadID)
+{
+    if (SplatThread(id.xy)) return;
+    float2 p = TexelPosition((int2)id.xy);
+    float influence = FeatureInfluence(p, (int2)id.xy);
+    if (influence <= 0.0) return;
+    influence *= _Strength * FinalMask(p, HeightAt(p));
+    if (influence <= 0.0) return;
+    uint3 target = uint3(id.xy, _TreeSlice);
+    _TreeState[target] = max(_TreeState[target], ForestDensity(p, (int2)id.xy) * saturate(influence));
 }
 
 // Grass: one slice of _GrassState per grass prototype. A Grass Scatter works out its meadow's density from the same

@@ -1,5 +1,27 @@
 # Changelog
 
+## Unreleased
+A world is configured entirely in the scene: the settings assets become blocks on the components.
+- The world settings, palette and baked data are blocks on the `StrataWorld` (Settings, Palette, Baked Data) instead
+  of `StrataWorldSettings`, `StrataPalette` and `StrataWorldData` assets. The palette's texture check and **Fix Import
+  Settings** are in the world's inspector. **Bake** writes the Baked Data block, so save the scene after baking.
+- A forest is a block on its Tree Scatter and a meadow a block on its Grass Scatter, instead of `StrataForest` and
+  `StrataMeadow` assets; each scatter is its own forest or meadow. A tree effect names a **Tree Scatter** (Scatter)
+  instead of a forest; a disabled Tree Scatter places nothing but can still be planted that way.
+- Prototypes (`StrataTreePrototype`, `StrataGrassPrototype`) and layers (`StrataLayer`) are still assets.
+- The spline's Profile curve is now called Cross Section (`SplineFeature.CrossSection`).
+- Plant works on area features (texture and noise stamps, filters, rock strata): it grows the chosen forest, by the
+  forest's own rules, where the feature acts, on top of what is there. Before, only splines planted (a line of
+  trees) and Plant on anything else did nothing.
+- Tree and Grass Scatter lose their mask, blend, paint and tree effect: the forest or meadow block decides where and
+  how densely it grows. The forest's **Floor Paint** replaces the Tree Scatter's paint.
+- Auto Splat's Flow For Full Moisture and Water Reach move to the world's settings (Texturing). Editing the moisture
+  settings or sea level now refreshes the preview.
+- Existing scenes need migrating before updating, or the asset data is lost: copy each settings, palette, data,
+  forest and meadow asset into the block on the component that used it (they keep their field names, so
+  `EditorJsonUtility` round trips them), point tree effects at Tree Scatters, and copy each Tree Scatter's paint into
+  its forest's floor paint and Auto Splat's moisture into the world settings.
+
 ## 0.8.0
 Performance. A 1920x1080 render of the 8 km test world (CPU and GPU) went from 11.7 to 6.3 ms from above the forest
 and from 11.2 to 9.0 ms at ground level.

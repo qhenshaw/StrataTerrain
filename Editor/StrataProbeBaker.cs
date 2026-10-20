@@ -286,7 +286,7 @@ namespace Strata.Editor
         private static Texture2D TerrainAlbedo(StrataWorld world)
         {
             StrataGrid grid = world.Heightfield.Grid;
-            IReadOnlyList<StrataLayer> layers = world.Settings.Palette != null ? world.Settings.Palette.Layers : new List<StrataLayer>();
+            IReadOnlyList<StrataLayer> layers = world.Palette.Layers;
             Color[] means = new Color[layers.Count];
             for (int i = 0; i < layers.Count; i++)
             {

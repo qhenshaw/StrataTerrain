@@ -72,53 +72,57 @@ namespace Strata
         None,
         // multiplies tree density by the feature's weight: 0 clears, 1 leaves it, 2 doubles it
         Density,
-        // splines: plants trees of the forest's species along the spline
+        // splines: plants a line of the forest's species along the spline; other features: grows the forest (by its own
+        // rules) where the feature acts
         Plant
     }
 
     // What a feature does to trees, after the heights and splats are final, in hierarchy order: scale the density of
-    // all forests (or one) where it acts, or plant a line of trees along a spline.
+    // all forests (or one) where it acts, plant a line of trees along a spline, or grow a forest where it acts.
     [Serializable]
     public struct StrataTreeEffect
     {
         public StrataTreeMode Mode;
         [Tooltip("Density: 0 clears, 1 leaves the density as it is, 2 doubles it.")]
         [Range(0f, 2f)] public float Density;
-        [Tooltip("Density: only this forest (none for all). Plant: the forest whose species are planted.")]
-        public StrataForest Forest;
+        [Tooltip("Density: only this Tree Scatter's forest (none for all). Plant: the Tree Scatter whose forest is planted " +
+                 "(a line along a spline, or grown by its own rules where any other feature acts).")]
+        public TreeScatter Scatter;
         [Tooltip("Splines: width of the effect as a multiple of the feature's width plus falloff.")]
         [Min(0f)] public float WidthScale;
-        [Tooltip("Plant: distance between trees along the spline, in metres.")]
+        [Tooltip("Plant on splines: distance between trees along the spline, in metres.")]
         [Min(0.5f)] public float Spacing;
-        [Tooltip("Plant: distance from the spline's centre, in metres; non-zero plants a row on each side.")]
+        [Tooltip("Plant on splines: distance from the spline's centre, in metres; non-zero plants a row on each side.")]
         [Min(0f)] public float Offset;
-        [Tooltip("Plant: random displacement of each tree, as a fraction of the spacing.")]
+        [Tooltip("Plant on splines: random displacement of each tree, as a fraction of the spacing.")]
         [Range(0f, 0.5f)] public float Jitter;
+
+        // The forest of the chosen Tree Scatter, or null for none.
+        public StrataForest TargetForest => Scatter != null ? Scatter.Forest : null;
 
         public static StrataTreeEffect Default => new() { Density = 0f, WidthScale = 1.2f, Spacing = 8f, Offset = 0f, Jitter = 0.15f };
     }
 
-    // Base for everything that shapes a Strata world's heights: a scene object under the StrataWorld, applied in
-    // hierarchy order on top of what the features above it produced. A feature reports the world XZ area it can touch,
-    // so the editor's live preview only re-evaluates what an edit affects, and a version that bumps whenever its
-    // settings change (transform changes are tracked by the preview itself).
+    // Base for everything that shapes a Strata world: a scene object under the StrataWorld, applied in hierarchy order
+    // on top of what the features above it produced. A feature reports the world XZ area it can touch, so the editor's
+    // live preview only re-evaluates what an edit affects, and a version that bumps whenever its settings change
+    // (transform changes are tracked by the preview itself). Features that shape or paint the ground keep their blend,
+    // mask, paint and tree effect on the component (StrataInlineFeature); scatters and Auto Splat don't use them.
     [ExecuteAlways]
     public abstract class StrataFeature : MonoBehaviour
     {
-        [SerializeField] protected StrataBlend _blend = StrataBlend.Add;
         [SerializeField, Range(0f, 1f)] protected float _strength = 1f;
-        [SerializeField] protected StrataMask _mask = StrataMask.Default;
-        [SerializeField] protected StrataPaint _paint = StrataPaint.Default;
-        [SerializeField] protected StrataTreeEffect _trees = StrataTreeEffect.Default;
 
-        public StrataTreeEffect Trees => _trees;
-        public bool AffectsTrees => _trees.Mode == StrataTreeMode.Density || _trees.Mode == StrataTreeMode.Plant && _trees.Forest != null;
-        public StrataBlend Blend => _blend;
+        private int _version;
+
+        public virtual StrataBlend Blend => StrataBlend.Add;
         public float Strength => _strength;
-        public StrataMask Mask => _mask;
-        public StrataPaint Paint => _paint;
-        public bool Paints => _paint.Enabled && _paint.Layer != null && _paint.Strength > 0f;
-        public int Version { get; private set; }
+        public virtual StrataMask Mask => default;
+        public virtual StrataPaint Paint => default;
+        public virtual StrataTreeEffect Trees => default;
+        public bool Paints => Paint.Enabled && Paint.Layer != null && Paint.Strength > 0f;
+        public bool AffectsTrees => Trees.Mode == StrataTreeMode.Density || Trees.Mode == StrataTreeMode.Plant && Trees.TargetForest != null;
+        public virtual int Version => _version;
         // False for features that only paint splats (Auto Splat), so edits to them don't re-evaluate heights.
         public virtual bool AffectsHeights => true;
 
@@ -128,9 +132,9 @@ namespace Strata
         // How far beyond its bounds this feature reads heights, in metres (filters).
         public virtual float Apron => 0f;
 
-        public void MarkChanged() => Version++;
+        public void MarkChanged() => _version++;
 
-        protected virtual void OnValidate() => Version++;
+        protected virtual void OnValidate() => _version++;
 
         // The world-space rectangle covered by this transform's XZ footprint (scale = size in metres), rotated about y.
         protected Rect FootprintBounds()

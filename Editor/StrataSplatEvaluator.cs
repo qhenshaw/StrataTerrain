@@ -103,8 +103,8 @@ namespace Strata.Editor
         // Whether any rule reads moisture, so the moisture map must follow height changes everywhere.
         public static bool NeedsMoisture(StrataWorld world, List<StrataEvaluator.Node> nodes)
         {
-            if (world.Settings.Palette == null || FindAutoSplat(nodes) == null) return false;
-            foreach (StrataLayer layer in world.Settings.Palette.Layers)
+            if (world.Palette.IsEmpty || FindAutoSplat(nodes) == null) return false;
+            foreach (StrataLayer layer in world.Palette.Layers)
                 if (layer != null && layer.Rule.Enabled && layer.Rule.Moisture.Enabled) return true;
             return false;
         }
@@ -112,7 +112,6 @@ namespace Strata.Editor
         // Rebuilds the world's moisture map from its current GPU heights.
         public void UpdateMoisture(StrataWorld world, List<StrataEvaluator.Node> nodes)
         {
-            AutoSplat auto = FindAutoSplat(nodes);
             StrataGrid grid = world.Heightfield.Grid;
             StrataWorldSettings settings = world.Settings;
             float spacing = settings.MoistureSpacing;
@@ -130,8 +129,8 @@ namespace Strata.Editor
             _shader.SetVector("_Coarse", moisture.Coarse);
             _shader.SetInts("_CoarseSize", size.x, size.y);
             float cellArea = spacing * spacing;
-            float flowCells = math.max(2f, (auto != null ? auto.FlowForFullMoisture : 40000f) / cellArea);
-            _shader.SetVector("_Water", new Vector4(settings.UseSeaLevel ? 1f : 0f, settings.SeaLevel, auto != null ? auto.WaterReach : 40f, math.log(flowCells)));
+            float flowCells = math.max(2f, settings.FlowForFullMoisture / cellArea);
+            _shader.SetVector("_Water", new Vector4(settings.UseSeaLevel ? 1f : 0f, settings.SeaLevel, settings.WaterReach, math.log(flowCells)));
 
             RenderTexture heights = Temporary(size, RenderTextureFormat.RFloat);
             RenderTexture receivers = Temporary(size, RenderTextureFormat.RInt);
@@ -211,7 +210,7 @@ namespace Strata.Editor
                              StrataTreeEvaluator.Context trees = null, GrassTarget grass = null)
         {
             StrataGrid grid = world.Heightfield.Grid;
-            StrataPalette palette = world.Settings.Palette;
+            StrataPalette palette = world.Palette;
             int layerCount = palette != null ? palette.Layers.Count : 0;
             EnsureTargets(grid);
             UploadRules(palette);
@@ -308,6 +307,7 @@ namespace Strata.Editor
             int treeInit = _shader.FindKernel("TreeInit");
             int treeScatter = _shader.FindKernel("TreeScatter");
             int effect = _shader.FindKernel("TreeEffect");
+            int plant = _shader.FindKernel("TreePlant");
             int treeWrite = _shader.FindKernel("TreeWrite");
             int grassInit = _shader.FindKernel("GrassInit");
             int grassScatter = _shader.FindKernel("GrassScatter");
@@ -347,14 +347,23 @@ namespace Strata.Editor
                 }
                 else if (feature.Trees.Mode == StrataTreeMode.Density)
                 {
-                    int slice = feature.Trees.Forest != null ? trees?.Forests.IndexOf(feature.Trees.Forest) ?? -1 : -1;
-                    if (feature.Trees.Forest != null && slice < 0) continue;
+                    int slice = feature.Trees.TargetForest != null ? trees?.Forests.IndexOf(feature.Trees.TargetForest) ?? -1 : -1;
+                    if (feature.Trees.TargetForest != null && slice < 0) continue;
                     if (!SetInfluence(effect, feature, heights, new Vector4(0f, 0f, math.max(feature.Trees.WidthScale, 0f), 1f))) continue;
                     _shader.SetTexture(effect, "_TreeState", _treeState);
                     _shader.SetTexture(effect, "_GrassState", _grassState);
                     _shader.SetInt("_TreeSlice", slice);
                     _shader.SetVector("_TreeEffect", new Vector4(feature.Trees.Density, 0f, 0f, 0f));
                     Dispatch(effect, size);
+                }
+                else if (StrataTreeEvaluator.IsAreaPlant(feature))
+                {
+                    int slice = trees?.Forests.IndexOf(feature.Trees.TargetForest) ?? -1;
+                    if (slice < 0 || !SetInfluence(plant, feature, heights, new Vector4(0f, 0f, 1f, 1f))) continue;
+                    SetForest(plant, feature.Trees.TargetForest);
+                    _shader.SetTexture(plant, "_TreeState", _treeState);
+                    _shader.SetInt("_TreeSlice", slice);
+                    Dispatch(plant, size);
                 }
             }
 
@@ -603,7 +612,7 @@ namespace Strata.Editor
             _shader.SetVector("_Grid", new Vector4(grid.Origin.x, grid.Origin.y, grid.Spacing));
             _shader.SetVector("_TileGrid", new Vector4(grid.TilesX, grid.TilesZ, grid.TileSize, grid.Resolution));
             _shader.SetVector("_HeightRange", new Vector4(grid.MinHeight, grid.HeightRange));
-            foreach (string name in new[] { "MoistureHeights", "SplatRules", "PaintFeature", "RockStrataMap", "TreeScatter", "TreeEffect", "TreeWrite", "GrassScatter" })
+            foreach (string name in new[] { "MoistureHeights", "SplatRules", "PaintFeature", "RockStrataMap", "TreeScatter", "TreeEffect", "TreePlant", "TreeWrite", "GrassScatter" })
                 _shader.SetTexture(_shader.FindKernel(name), "_HeightTiles", world.Heightfield.Texture);
         }
 

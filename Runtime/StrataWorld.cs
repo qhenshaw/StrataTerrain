@@ -5,8 +5,9 @@ using UnityEngine.Rendering;
 
 namespace Strata
 {
-    // The root of a Strata world. It owns the heightfield, trees and grass densities (loaded from the baked
-    // StrataWorldData, or flat and bare until the first bake), draws them with a StrataTerrainRenderer, a
+    // The root of a Strata world. Its Settings, Palette and Baked Data blocks hold the world's grid and options, the
+    // layers it paints with, and what the last bake produced. It owns the heightfield, trees and grass densities (loaded
+    // from the baked data, or flat and bare until the first bake), draws them with a StrataTerrainRenderer, a
     // StrataTreeRenderer and a StrataGrassRenderer (which generates grass on the GPU per camera) in edit and play mode,
     // and in play mode streams terrain and tree trunk collision around the registered focus transforms and StrataFocus
     // components. Authoring features (stamps, splines, filters) live under this object in
@@ -25,14 +26,16 @@ namespace Strata
         private static readonly int GroundParamsId = Shader.PropertyToID("_StrataGroundParams");
         private static readonly List<StrataWorld> s_active = new();
 
-        [SerializeField] private StrataWorldSettings _settings;
-        [SerializeField] private StrataWorldData _data;
         [SerializeField] private Material _material;
         [Tooltip("Strata's StrataGrass.compute; assign it so builds include it.")]
         [SerializeField] private ComputeShader _grassShader;
         [SerializeField] private bool _castShadows = true;
         [Tooltip("Stream collision around the main camera as well as the registered focus transforms.")]
         [SerializeField] private bool _cameraIsFocus;
+        [SerializeField] private StrataWorldSettings _settings = new();
+        [SerializeField] private StrataPalette _palette = new();
+        [Tooltip("Written by Bake: where the baked tiles are and what they refer to.")]
+        [SerializeField] private StrataWorldData _data = new();
 
         private readonly List<Transform> _foci = new();
         private readonly List<Transform> _focusScratch = new();
@@ -41,7 +44,8 @@ namespace Strata
 
         public static IReadOnlyList<StrataWorld> Active => s_active;
         public StrataWorldSettings Settings => _settings;
-        public StrataWorldData Data { get => _data; set => _data = value; }
+        public StrataPalette Palette => _palette;
+        public StrataWorldData Data => _data;
         public StrataHeightfield Heightfield { get; private set; }
         public StrataSplatmap Splatmap { get; private set; }
         public StrataPaletteTextures PaletteTextures { get; private set; }
@@ -67,6 +71,12 @@ namespace Strata
         }
 
         public void UnregisterFocus(Transform focus) => _foci.Remove(focus);
+
+        private void OnValidate()
+        {
+            _settings.Validate();
+            _palette.Validate();
+        }
 
         private void OnEnable()
         {
@@ -109,7 +119,7 @@ namespace Strata
 
         private void Build()
         {
-            if (_settings == null || !_settings.Grid.IsValid) return;
+            if (!_settings.Grid.IsValid) return;
             // without a material asset the shader may be stripped from builds, so this fallback is for the editor
             Shader fallback = _material == null ? Shader.Find("Strata/TerrainSurface") : null;
             if (_material == null && fallback == null)
@@ -118,8 +128,8 @@ namespace Strata
                 return;
             }
             Material material = _material != null ? _material : new Material(fallback);
-            bool baked = _data != null && _data.Grid.Equals(_settings.Grid) && _data.IsComplete;
-            if (_data != null && !baked)
+            bool baked = _data.Grid.Equals(_settings.Grid) && _data.IsComplete;
+            if (_data.Grid.IsValid && !baked)
                 Debug.LogWarning($"{name}: the baked data is missing or doesn't match the world settings ({_settings.Grid}); bake again.", this);
             // play mode streams tiles in around the cameras and foci; the editor keeps every tile resident to edit them
             bool stream = baked && Application.isPlaying && _settings.Streaming && _settings.ResidentTiles < _settings.Grid.TileCount;
@@ -221,8 +231,8 @@ namespace Strata
         {
             if (Renderer == null) return;
             PaletteTextures?.Dispose();
-            PaletteTextures = new StrataPaletteTextures(_settings.Palette);
-            foreach (string problem in PaletteTextures.Problems) Debug.LogWarning($"{name}: {problem}", _settings.Palette);
+            PaletteTextures = new StrataPaletteTextures(_palette);
+            foreach (string problem in PaletteTextures.Problems) Debug.LogWarning($"{name}: {problem}", this);
             Renderer.SetTexturing(Splatmap, PaletteTextures);
         }
 

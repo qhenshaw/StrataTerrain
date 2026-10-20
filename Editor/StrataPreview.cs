@@ -36,6 +36,7 @@ namespace Strata.Editor
             public readonly Dictionary<StrataFeature, FeatureState> Features = new();
             public bool NeedsFull = true;
             public int PaletteVersion;
+            public int MoistureSignature;
             public int DensitySignature;
             public int PlacementSignature;
             // tree density readbacks not yet stored, oldest first, with how many slices each has
@@ -98,7 +99,7 @@ namespace Strata.Editor
             if (!Enabled || EditorApplication.isPlayingOrWillChangePlaymode || Application.isPlaying) return;
             foreach (StrataWorld world in StrataWorld.Active)
             {
-                if (world == null || world.Heightfield == null || world.Settings == null) continue;
+                if (world == null || world.Heightfield == null) continue;
                 // a world still holding streamed slots (in case one outlives play mode) is rebuilt with every tile resident
                 if (!world.Settings.Grid.Equals(world.Heightfield.Grid) || world.Heightfield.Streamed)
                 {
@@ -116,11 +117,19 @@ namespace Strata.Editor
                 StrataGrid grid = world.Heightfield.Grid;
                 List<StrataEvaluator.Node> nodes = StrataEvaluator.Collect(world);
                 RectInt dirty = Diff(state, grid, nodes, out bool splatAll);
-                int paletteVersion = world.Settings.Palette != null ? world.Settings.Palette.Version : 0;
+                int paletteVersion = world.Palette.Version;
                 if (paletteVersion != state.PaletteVersion)
                 {
                     state.PaletteVersion = paletteVersion;
                     world.RebuildPalette();
+                    splatAll = true;
+                }
+                StrataWorldSettings settings = world.Settings;
+                int moistureSignature = System.HashCode.Combine(settings.UseSeaLevel, settings.SeaLevel, settings.MoistureSpacing,
+                                                                settings.FlowForFullMoisture, settings.WaterReach);
+                if (moistureSignature != state.MoistureSignature)
+                {
+                    state.MoistureSignature = moistureSignature;
                     splatAll = true;
                 }
                 int densitySignature = StrataTreeEvaluator.DensitySignature(nodes);

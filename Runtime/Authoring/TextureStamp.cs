@@ -7,7 +7,7 @@ namespace Strata
     // are its footprint in metres. The edges fade out over Edge Falloff (a fraction of the footprint) shaped by the
     // falloff curve.
     [AddComponentMenu("Strata/Texture Stamp")]
-    public class TextureStamp : StrataFeature
+    public class TextureStamp : StrataInlineFeature
     {
         [SerializeField] private Texture2D _texture;
         [Tooltip("Height in metres of a white texel.")]

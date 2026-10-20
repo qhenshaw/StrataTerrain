@@ -16,9 +16,10 @@ namespace Strata
     }
 
     // A ground cover of grass and details: where it grows (height, slope, moisture, terrain layers, noise), how densely
-    // (fraction of each prototype's full density), and which prototypes it mixes. A Grass Scatter feature places it.
-    [CreateAssetMenu(menuName = "Strata/Meadow", fileName = "StrataMeadow")]
-    public class StrataMeadow : ScriptableObject
+    // (fraction of each prototype's full density), and which prototypes it mixes. It is a block on a Grass Scatter,
+    // which places it.
+    [Serializable]
+    public class StrataMeadow
     {
         [SerializeField, Range(0f, 1f)] private float _density = 1f;
         [SerializeField] private StrataRange _height = new(0f, 1000f, 20f) { Enabled = true };
@@ -70,6 +71,7 @@ namespace Strata
             _version++;
         }
 
-        private void OnValidate() => _version++;
+        // Called by the owning Grass Scatter when it is edited.
+        internal void Touch() => _version++;
     }
 }

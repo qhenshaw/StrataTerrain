@@ -1,3 +1,4 @@
+using System;
 using Unity.Mathematics;
 using UnityEngine;
 
@@ -10,11 +11,11 @@ namespace Strata
         Quarter = 4
     }
 
-    // The authored shape of a Strata world: its tile grid and height range, how far each CDLOD level reaches, and how
-    // collision streams. A StrataWorld reads its grid from here; a bake copies the grid into StrataWorldData so the
-    // baked tiles keep working even if these settings are edited later.
-    [CreateAssetMenu(menuName = "Strata/World Settings", fileName = "StrataWorldSettings")]
-    public class StrataWorldSettings : ScriptableObject
+    // The authored shape of a Strata world, as a block on its StrataWorld: the tile grid and height range, how far each
+    // CDLOD level reaches, and how collision streams. A bake copies the grid into the world's baked data so the baked
+    // tiles keep working even if these settings are edited later.
+    [Serializable]
+    public class StrataWorldSettings
     {
         [Header("Grid")]
         [SerializeField] private Vector2 _origin;
@@ -27,7 +28,6 @@ namespace Strata
         [SerializeField] private float _maxHeight = 900f;
 
         [Header("Texturing")]
-        [SerializeField] private StrataPalette _palette;
         [Tooltip("Height samples per splat texel: 1 gives splats at the height spacing, 2 at twice it, 4 at four times.")]
         [SerializeField] private StrataSplatSpacing _splatSpacing = StrataSplatSpacing.Half;
         [Tooltip("Terrain below this height counts as water for the moisture rule input.")]
@@ -35,6 +35,10 @@ namespace Strata
         [SerializeField] private float _seaLevel;
         [Tooltip("Spacing of the world-wide moisture map (flow and distance to water), in metres.")]
         [SerializeField, Min(1f)] private float _moistureSpacing = 8f;
+        [Tooltip("Upstream area, in square metres, at which flow counts as fully moist.")]
+        [SerializeField, Min(1f)] private float _flowForFullMoisture = 40000f;
+        [Tooltip("Distance from water, in metres, over which moisture fades out.")]
+        [SerializeField, Min(0f)] private float _waterReach = 40f;
 
         [Header("Rendering")]
         // below about 5, a patch can still be morphing where it meets a finer neighbour, which opens cracks
@@ -80,10 +84,11 @@ namespace Strata
             SplatDivisor = (int)_splatSpacing
         };
 
-        public StrataPalette Palette => _palette;
         public bool UseSeaLevel => _useSeaLevel;
         public float SeaLevel => _seaLevel;
         public float MoistureSpacing => _moistureSpacing;
+        public float FlowForFullMoisture => _flowForFullMoisture;
+        public float WaterReach => _waterReach;
         public float LodDistanceRatio => _lodDistanceRatio;
         public float TreeDistanceScale => _treeDistanceScale;
         public int TreeSeed => _treeSeed;
@@ -96,7 +101,8 @@ namespace Strata
         public int CollisionLayer => _collisionLayer;
         public float ProbeMinSpacing => _probeMinSpacing;
 
-        private void OnValidate()
+        // Clamps the settings to what the world can use; called by the StrataWorld when it is edited.
+        public void Validate()
         {
             _tileResolution = math.max(StrataGrid.PatchQuads, math.ceilpow2(_tileResolution));
             _maxHeight = math.max(_maxHeight, _minHeight + 1f);

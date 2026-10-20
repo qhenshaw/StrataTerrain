@@ -13,7 +13,7 @@ namespace Strata
     // Evaluates its child features into a layer of their own, then blends that layer into the terrain as one result,
     // with the group's blend mode, strength and mask. Its bounds are its children's, so it has no footprint of its own.
     [AddComponentMenu("Strata/Stamp Group")]
-    public class StampGroup : StrataFeature
+    public class StampGroup : StrataInlineFeature
     {
         [SerializeField] private StrataGroupSource _source = StrataGroupSource.Empty;
 

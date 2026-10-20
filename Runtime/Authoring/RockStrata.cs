@@ -10,7 +10,7 @@ namespace Strata
     // texture up with the beds. Beds are horizontal layers tilted by the dip angle towards the dip direction (the
     // transform's y rotation), with jittered thicknesses. Painting (with Source Influence) paints the ledge tops.
     [AddComponentMenu("Strata/Rock Strata")]
-    public class RockStrata : StrataFeature
+    public class RockStrata : StrataInlineFeature
     {
         [SerializeField] private bool _unbounded;
         [SerializeField, Range(0f, 0.5f)] private float _edgeFalloff = 0.15f;

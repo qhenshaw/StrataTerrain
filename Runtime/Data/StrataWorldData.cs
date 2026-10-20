@@ -1,14 +1,16 @@
+using System;
 using System.IO;
 using Unity.Collections;
 using UnityEngine;
 
 namespace Strata
 {
-    // What a bake produced: the grid the tiles were baked with, the folder under StreamingAssets holding one .bytes file
-    // per tile (heights, splats, trees and grass) and the far file (the whole world coarsely, and every CDLOD node's
-    // height bounds), and the definitions and prototypes the files refer to by index. The files stay out of the asset
-    // database so a streaming world can read just the tiles it needs.
-    public class StrataWorldData : ScriptableObject
+    // What a bake produced, as a block on the StrataWorld that Bake fills in: the grid the tiles were baked with, the
+    // folder under StreamingAssets holding one .bytes file per tile (heights, splats, trees and grass) and the far file
+    // (the whole world coarsely, and every CDLOD node's height bounds), and the definitions and prototypes the files
+    // refer to by index. The files stay out of the asset database so a streaming world can read just the tiles it needs.
+    [Serializable]
+    public class StrataWorldData
     {
         [SerializeField] private StrataGrid _grid;
         [Tooltip("Folder under StreamingAssets holding the tile files.")]

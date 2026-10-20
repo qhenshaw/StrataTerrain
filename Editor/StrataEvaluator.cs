@@ -262,7 +262,7 @@ namespace Strata.Editor
             int kernel = _height.FindKernel("SplineFeature");
             SetCommon(_height, kernel, grid, spline, heights, before, region, clip);
             SetCurve(_curve, spline.FalloffCurve);
-            SetCurve(_profile, spline.Profile);
+            SetCurve(_profile, spline.CrossSection);
             _height.SetBuffer(kernel, "_SplinePositions", _splinePositions);
             _height.SetBuffer(kernel, "_SplineShapes", _splineShapes);
             _height.SetInt("_SplineCount", count);

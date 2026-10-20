@@ -1,4 +1,3 @@
-using Unity.Mathematics;
 using UnityEngine;
 
 namespace Strata
@@ -17,7 +16,7 @@ namespace Strata
     // blended back with the edge falloff, strength and mask; the blend mode doesn't apply. Erosion is confined to the
     // footprint, so the live preview reruns the whole footprint whenever anything inside it changes.
     [AddComponentMenu("Strata/Filter Feature")]
-    public class FilterFeature : StrataFeature
+    public class FilterFeature : StrataInlineFeature
     {
         [SerializeField] private StrataFilter _filter = StrataFilter.Smooth;
         [SerializeField] private bool _unbounded;
@@ -68,8 +67,6 @@ namespace Strata
         {
             transform.localScale = new Vector3(512f, 1f, 512f);
             _blend = StrataBlend.Set;
-            _mask.UseHeight = false;
-            _mask.UseSlope = false;
         }
 
         private void OnDrawGizmosSelected()

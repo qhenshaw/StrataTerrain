@@ -4,9 +4,12 @@ Non-destructive tiled terrain for Unity 6 URP (PC, DX12/Vulkan).
 
 - Heights come from scene objects under a `StrataWorld`, evaluated in hierarchy order: texture stamps, noise stamps,
   splines (road, river, ridge) and filters (smooth, terrace, thermal and hydraulic erosion), with stamp groups.
-- Texturing: `StrataLayer` assets (albedo, normal, mask map, tiling, per-layer rule) listed in a `StrataPalette`. The
+- Everything is configured in the scene: each feature keeps its settings on its component, and the `StrataWorld` has
+  Settings (grid, heights, texturing, streaming, collision, probes), Palette and Baked Data blocks. Only prototypes and
+  layers are assets.
+- Texturing: `StrataLayer` assets (albedo, normal, mask map, tiling, per-layer rule) listed in the world's palette. The
   **Auto Splat** feature paints the layers by their rules (height, slope, curvature, moisture from flow and water,
-  noise); any feature can also paint a layer where it acts. Splats keep the four strongest layers per texel at 1, 2
+  noise; the moisture inputs are world settings); any feature can also paint a layer where it acts. Splats keep the four strongest layers per texel at 1, 2
   or 4 m. The surface shader height-blends them with triplanar mapping on steep ground, far-distance tiling, macro
   variation and optional hex-tiled stochastic sampling, under URP PBR lighting.
 - Rock strata: the **Rock Strata** feature terraces steep ground into ledges along jittered, dipping rock beds (baked
@@ -16,20 +19,23 @@ Non-destructive tiled terrain for Unity 6 URP (PC, DX12/Vulkan).
 - Trees: `StrataTreePrototype` assets are made from LODGroup prefabs (**Assets > Strata > Create Tree Prototypes**):
   their materials become `Strata/Tree` copies, LOD distances come from the LODGroup (the last mesh LOD reaches
   150 m), a CapsuleCollider on the prefab becomes the trunk capsule, and **Bake Impostor** renders the hemi-octahedral
-  impostor drawn to 2 km. `StrataForest` assets mix weighted species (spacing, scale, lean, ground alignment, sink and
-  their own height/slope/moisture ranges) under a forest rule (height, slope, moisture, terrain layers to grow on or
-  avoid, noise for stands and clearings). The **Tree Scatter** feature places a forest over the world or a footprint
-  (Replace swaps out the forests above it; its paint lays a forest floor by density), and every feature's tree effect
-  can thin or clear trees where it acts (roads, rivers) or plant a line along a spline. SpeedTree and HDRP prefabs
+  impostor drawn to 2 km. A **Tree Scatter** is a forest: weighted species (spacing, scale, lean, ground alignment,
+  sink and their own height/slope/moisture ranges) under a forest rule (height, slope, moisture, terrain layers to
+  grow on or avoid, noise for stands and clearings), placed over the world or a footprint (Replace swaps out the
+  forests above it; the floor paint lays a layer by density). Every feature's tree effect can thin or clear trees
+  where it acts (roads, rivers), plant a Tree Scatter's species in a line along a spline, or grow its forest where an
+  area feature acts (a forest on a stamped mountain). SpeedTree and HDRP prefabs
   convert too (billboard LODs dropped, vertex occlusion kept); prototypes with a MeshCollider (rocks) get mesh
   colliders. Grass prototypes come from small prefabs (**Assets > Strata > Create Grass Prototypes**) and can take the
   terrain's colour (greyscale textures are multiplied by it).
 - Grass: `StrataGrassPrototype` assets (a small mesh with a `Strata/Tree` material, clumps per square metre, range,
-  variation) mixed by `StrataMeadow` assets and placed by the **Grass Scatter** feature; tree effects on every forest
+  variation) mixed and placed by the **Grass Scatter** feature (its meadow: density, ranges, layers, noise and
+  entries); tree effects on every forest
   clear grass too. Density maps (up to 8 prototypes) are baked; the clumps themselves are generated on the GPU around
   each camera every frame and drawn with indirect draws. Assign `StrataGrass.compute` on the world for builds.
 - Edits preview live in the editor; **Bake** writes one compact `.bytes` file per tile (heights, splats, trees and
-  grass densities) and a far file to `StreamingAssets/Strata/<world>/`.
+  grass densities) and a far file to `StreamingAssets/Strata/<world>/`, and records them in the world's Baked Data
+  (save the scene afterwards).
 - Streaming (play mode): tiles near cameras and focus transforms are loaded asynchronously into a fixed number of
   slots; everything else is drawn from the resident far copy (heights every 8 m, splats every 8 m at the default
   spacing). Trees are all resident (16 bytes each on the GPU); grass and collision exist only on resident tiles.

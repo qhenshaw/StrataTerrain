@@ -43,12 +43,20 @@ namespace Strata.Editor
             _caches.Clear();
         }
 
-        // The forests Tree Scatters place, in hierarchy order: the density slices.
+        // Plant on anything but a spline grows its forest by density where the feature acts (TreePlant), so its forest
+        // needs a density slice; a spline plants a line of trees instead (Plant below).
+        public static bool IsAreaPlant(StrataFeature feature) =>
+            feature is not SplineFeature && feature.Trees.Mode == StrataTreeMode.Plant && feature.Trees.TargetForest != null;
+
+        // The forests Tree Scatters and area Plant effects grow, in hierarchy order: the density slices.
         public static List<StrataForest> ScatteredForests(List<StrataEvaluator.Node> nodes)
         {
             List<StrataForest> forests = new();
             foreach (StrataFeature feature in StrataEvaluator.Flatten(nodes))
-                if (feature is TreeScatter { Forest: not null } scatter && !forests.Contains(scatter.Forest)) forests.Add(scatter.Forest);
+            {
+                StrataForest forest = feature is TreeScatter scatter ? scatter.Forest : IsAreaPlant(feature) ? feature.Trees.TargetForest : null;
+                if (forest != null && !forests.Contains(forest)) forests.Add(forest);
+            }
             return forests;
         }
 
@@ -57,8 +65,8 @@ namespace Strata.Editor
         {
             List<StrataForest> forests = ScatteredForests(nodes);
             foreach (StrataFeature feature in StrataEvaluator.Flatten(nodes))
-                if (feature is SplineFeature && feature.Trees.Mode == StrataTreeMode.Plant && feature.Trees.Forest != null && !forests.Contains(feature.Trees.Forest))
-                    forests.Add(feature.Trees.Forest);
+                if (feature is SplineFeature && feature.Trees.Mode == StrataTreeMode.Plant && feature.Trees.TargetForest != null && !forests.Contains(feature.Trees.TargetForest))
+                    forests.Add(feature.Trees.TargetForest);
             return forests;
         }
 
@@ -254,8 +262,8 @@ namespace Strata.Editor
             List<StrataTreePlacer.Planted> planted = new();
             foreach (StrataFeature feature in StrataEvaluator.Flatten(nodes))
             {
-                if (feature is not SplineFeature spline || feature.Trees.Mode != StrataTreeMode.Plant || feature.Trees.Forest == null) continue;
-                if (!ranges.TryGetValue(feature.Trees.Forest, out (int First, int Count) range) || range.Count == 0) continue;
+                if (feature is not SplineFeature spline || feature.Trees.Mode != StrataTreeMode.Plant || feature.Trees.TargetForest == null) continue;
+                if (!ranges.TryGetValue(feature.Trees.TargetForest, out (int First, int Count) range) || range.Count == 0) continue;
                 StrataTreeEffect effect = feature.Trees;
                 float totalWeight = 0f;
                 for (int i = range.First; i < range.First + range.Count; i++) totalWeight += table[i].Weight;
