@@ -1,6 +1,12 @@
 # Changelog
 
 ## Unreleased
+- `StrataNavMesh` (add it next to a `StrataWorld`) streams NavMesh around the collision foci in play mode: a box per
+  focus, built from the streamed terrain chunks and tree colliders plus colliders on Extra Layers (moving bodies,
+  agents and foci are skipped), one NavMeshData per agent type in Agent Types. A box rebuilds asynchronously once its
+  focus moves Rebuild Distance or a collision chunk inside it changes. `StrataCollision.Root` and
+  `StrataTreeColliders.Root` expose where their colliders live. The package now depends on the built-in AI module.
+
 A world is configured entirely in the scene: the settings assets become blocks on the components.
 - The world settings, palette and baked data are blocks on the `StrataWorld` (Settings, Palette, Baked Data) instead
   of `StrataWorldSettings`, `StrataPalette` and `StrataWorldData` assets. The palette's texture check and **Fix Import

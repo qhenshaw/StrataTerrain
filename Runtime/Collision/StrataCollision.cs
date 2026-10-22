@@ -39,6 +39,8 @@ namespace Strata
         public event Action<int2, Bounds> ChunkDeactivated;
 
         public int ActiveCount => _active.Count;
+        // every chunk collider lives under this, for gathering them (NavMesh source collection)
+        public Transform Root => _root;
         public float ChunkSize => _chunkQuads * _heights.Grid.Spacing;
 
         public StrataCollision(StrataHeightfield heights, Transform parent, float chunkSize, float radius, int layer)

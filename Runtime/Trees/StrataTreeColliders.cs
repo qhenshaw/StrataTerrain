@@ -20,6 +20,8 @@ namespace Strata
         private readonly Stack<MeshCollider> _meshPool = new();
 
         public int ActiveCount { get; private set; }
+        // every tree collider lives under this, for gathering them (NavMesh source collection)
+        public Transform Root => _root;
 
         public StrataTreeColliders(StrataTrees trees, StrataCollision collision, Transform parent, int layer)
         {

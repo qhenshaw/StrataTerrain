@@ -44,5 +44,8 @@ Non-destructive tiled terrain for Unity 6 URP (PC, DX12/Vulkan).
   per-tree LOD crossfade and impostors at 16 bytes of GPU memory a tree.
 - Terrain mesh collision and tree trunk capsules are streamed in chunks around focus transforms (`RegisterFocus`, or
   a `StrataFocus` component).
+- A `StrataNavMesh` next to the world streams NavMesh around the same foci in play mode, from that collision plus
+  colliders on its Extra Layers, with one NavMesh per listed agent type. It uses the engine's `NavMeshBuilder`, so the
+  AI Navigation package isn't needed.
 
 Namespace: `Strata`.
