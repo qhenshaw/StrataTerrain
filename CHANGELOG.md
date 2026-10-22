@@ -1,12 +1,6 @@
 # Changelog
 
-## Unreleased
-- `StrataNavMesh` (add it next to a `StrataWorld`) streams NavMesh around the collision foci in play mode: a box per
-  focus, built from the streamed terrain chunks and tree colliders plus colliders on Extra Layers (moving bodies,
-  agents and foci are skipped), one NavMeshData per agent type in Agent Types. A box rebuilds asynchronously once its
-  focus moves Rebuild Distance or a collision chunk inside it changes. `StrataCollision.Root` and
-  `StrataTreeColliders.Root` expose where their colliders live. The package now depends on the built-in AI module.
-
+## 0.9.0
 A world is configured entirely in the scene: the settings assets become blocks on the components.
 - The world settings, palette and baked data are blocks on the `StrataWorld` (Settings, Palette, Baked Data) instead
   of `StrataWorldSettings`, `StrataPalette` and `StrataWorldData` assets. The palette's texture check and **Fix Import
@@ -27,6 +21,16 @@ A world is configured entirely in the scene: the settings assets become blocks o
   forest and meadow asset into the block on the component that used it (they keep their field names, so
   `EditorJsonUtility` round trips them), point tree effects at Tree Scatters, and copy each Tree Scatter's paint into
   its forest's floor paint and Auto Splat's moisture into the world settings.
+
+Navigation and imports.
+- `StrataNavMesh` (add it next to a `StrataWorld`) streams NavMesh around the collision foci in play mode: a box per
+  focus, built from the streamed terrain chunks and tree colliders plus colliders on Extra Layers (moving bodies,
+  agents and foci are skipped), one NavMeshData per agent type in Agent Types. A box rebuilds asynchronously once its
+  focus moves Rebuild Distance or a collision chunk inside it changes. `StrataCollision.Root` and
+  `StrataTreeColliders.Root` expose where their colliders live. The package now depends on the built-in AI module.
+- The tree builder converts Amplify materials too (`_Albedo` base maps, and `_SmoothnessMap` gloss or roughness maps
+  as a constant smoothness), and a prototype with no collider on its prefab that doesn't sway (a rock) collides with
+  its LOD0 mesh.
 
 ## 0.8.0
 Performance. A 1920x1080 render of the 8 km test world (CPU and GPU) went from 11.7 to 6.3 ms from above the forest
