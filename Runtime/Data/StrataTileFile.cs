@@ -14,8 +14,8 @@ namespace Strata
     // map at splat resolution for each. Version 6 files may follow that with optional sections, each a byte length and
     // its bytes, in flag order: (flag Holes) a sample rectangle of the tile and the terrain's presence there (a byte per
     // sample, below 128 a hole cut by a cave; samples outside the rectangle are solid), then (flag Caves) the tile's
-    // cave meshes as StrataCaveData encodes them. A tile with neither is still written as version 5, so worlds without
-    // caves bake exactly as before. Version 1 files have heights only, version 2 no strata map, version 3 no trees,
+    // cave meshes as StrataCaveData encodes them, then (flag Formations) its formation count and StrataFormationRecords.
+    // A tile with none of them is still written as version 5, so worlds without caves bake exactly as before. Version 1 files have heights only, version 2 no strata map, version 3 no trees,
     // version 4 no grass, version 5 no holes or caves.
     public static class StrataTileFile
     {
@@ -26,6 +26,7 @@ namespace Strata
         public const int Grass = 8;
         public const int Holes = 16;
         public const int Caves = 32;
+        public const int Formations = 64;
         private const int Magic = 0x54525453; // "STRT"
         private const int Version = 6;
         private const int PlainVersion = 5;
@@ -39,13 +40,13 @@ namespace Strata
                                  NativeSlice<uint> weights, NativeSlice<ushort> strata, NativeArray<StrataTreeRecord> trees,
                                  int grassTypes, NativeArray<byte> grass, StrataTileExtras extras = null)
         {
-            bool holes = extras?.Holes != null, caves = extras?.Caves != null;
+            bool holes = extras?.Holes != null, caves = extras?.Caves != null, formations = extras?.Formations != null;
             using MemoryStream stream = new();
             using BinaryWriter writer = new(stream);
             writer.Write(Magic);
-            writer.Write(holes || caves ? Version : PlainVersion);
+            writer.Write(holes || caves || formations ? Version : PlainVersion);
             writer.Write(samples);
-            writer.Write(Splats | StrataMap | Trees | Grass | (holes ? Holes : 0) | (caves ? Caves : 0));
+            writer.Write(Splats | StrataMap | Trees | Grass | (holes ? Holes : 0) | (caves ? Caves : 0) | (formations ? Formations : 0));
             byte[] bytes = new byte[heights.Length * 2];
             for (int i = 0; i < heights.Length; i++)
             {
@@ -82,6 +83,15 @@ namespace Strata
             {
                 writer.Write(extras.Caves.Length);
                 writer.Write(extras.Caves);
+            }
+            if (formations)
+            {
+                byte[] records = extras.Formations.Length > 0
+                    ? new NativeArray<StrataFormationRecord>(extras.Formations, Allocator.Temp).Reinterpret<byte>(UnsafeUtility.SizeOf<StrataFormationRecord>()).ToArray()
+                    : Array.Empty<byte>();
+                writer.Write(4 + records.Length);
+                writer.Write(extras.Formations.Length);
+                writer.Write(records);
             }
             writer.Flush();
 
@@ -225,6 +235,20 @@ namespace Strata
             return caves;
         }
 
+        // A tile file's formations (empty if it has none), in a new array the caller disposes.
+        public static unsafe NativeArray<StrataFormationRecord> ReadFormations(NativeArray<byte> file, int samples, int splatSamples, Allocator allocator)
+        {
+            long offset = SectionOffset(file, samples, splatSamples, Formations, out int length);
+            if (offset < 0) return new NativeArray<StrataFormationRecord>(0, allocator);
+            byte* section = (byte*)file.GetUnsafeReadOnlyPtr() + offset;
+            int count = *(int*)section;
+            int size = UnsafeUtility.SizeOf<StrataFormationRecord>();
+            if (count < 0 || length != 4 + count * size) throw new InvalidDataException("Strata tile file formations are malformed.");
+            NativeArray<StrataFormationRecord> records = new(count, allocator, NativeArrayOptions.UninitializedMemory);
+            UnsafeUtility.MemCpy(records.GetUnsafePtr(), section + 4, (long)count * size);
+            return records;
+        }
+
         // Where an optional section's bytes start (after its length), or -1 if the file doesn't have it.
         private static unsafe long SectionOffset(NativeArray<byte> file, int samples, int splatSamples, int flag, out int length)
         {
@@ -236,7 +260,7 @@ namespace Strata
             long offset = HeaderSize + samples * samples * 2L + 4 + count * 10L;
             offset += 4 + (long)*(int*)(bytes + offset) * UnsafeUtility.SizeOf<StrataTreeRecord>();
             offset += 4 + (long)*(int*)(bytes + offset) * count;
-            for (int section = Holes; section <= Caves; section <<= 1)
+            for (int section = Holes; section <= Formations; section <<= 1)
             {
                 if ((header[3] & section) == 0) continue;
                 if (file.Length < offset + 4) throw new InvalidDataException("Strata tile file sections are truncated.");
@@ -259,13 +283,15 @@ namespace Strata
         }
     }
 
-    // The optional sections of a tile: its holes (presence bytes over a sample rectangle) and encoded cave meshes.
+    // The optional sections of a tile: its holes (presence bytes over a sample rectangle), encoded cave meshes and
+    // formations.
     public sealed class StrataTileExtras
     {
         public RectInt HoleRect;
         public byte[] Holes;
         public byte[] Caves;
+        public StrataFormationRecord[] Formations;
 
-        public bool IsEmpty => Holes == null && Caves == null;
+        public bool IsEmpty => Holes == null && Caves == null && Formations == null;
     }
 }

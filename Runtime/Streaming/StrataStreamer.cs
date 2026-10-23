@@ -30,6 +30,7 @@ namespace Strata
         private readonly StrataGrassMap _grass;
         private readonly StrataTrees _trees;
         private readonly StrataCaves _caves;
+        private readonly StrataFormations _formations;
         private readonly float _radius;
         private readonly float _immediateRadius;
         private readonly int _maxLoads;
@@ -47,9 +48,10 @@ namespace Strata
         public event Action<int> TileLoaded;
 
         public StrataStreamer(StrataWorldData data, StrataHeightfield heights, StrataSplatmap splats, StrataGrassMap grass, StrataTrees trees,
-                              StrataCaves caves, float radius, float immediateRadius, int maxLoads)
+                              StrataCaves caves, StrataFormations formations, float radius, float immediateRadius, int maxLoads)
         {
             _caves = caves;
+            _formations = formations;
             _data = data;
             _heights = heights;
             _splats = splats;
@@ -157,6 +159,7 @@ namespace Strata
             _grass?.SetTile(slot, file);
             _trees.RebuildTile(tile);
             _caves?.SetTile(tile, file, grid.SplatSamples);
+            _formations?.SetTile(tile, file, grid.SplatSamples);
             LoadedTotal++;
             LastApplyMilliseconds = (System.Diagnostics.Stopwatch.GetTimestamp() - started) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
             TileLoaded?.Invoke(tile);
@@ -184,6 +187,7 @@ namespace Strata
             _heights.ReleaseHoles(tile);
             _splats.ReleaseTile(tile);
             _caves?.ReleaseTile(tile);
+            _formations?.ReleaseTile(tile);
         }
 
         private static void Dispose(Load load)

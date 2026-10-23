@@ -19,6 +19,7 @@ namespace Strata
         [SerializeField] private StrataBandDefinition[] _strata = new StrataBandDefinition[0];
         [SerializeField] private StrataTreePrototype[] _treePrototypes = new StrataTreePrototype[0];
         [SerializeField] private StrataGrassPrototype[] _grassPrototypes = new StrataGrassPrototype[0];
+        [SerializeField] private StrataFormationPrototype[] _formationPrototypes = new StrataFormationPrototype[0];
         [SerializeField] private float _caveVoxelSize;
         [SerializeField] private int _holedTiles;
 
@@ -30,6 +31,8 @@ namespace Strata
         public StrataTreePrototype[] TreePrototypes => _treePrototypes ?? new StrataTreePrototype[0];
         // The grass prototypes the tiles' grass density maps are for, in order.
         public StrataGrassPrototype[] GrassPrototypes => _grassPrototypes ?? new StrataGrassPrototype[0];
+        // The formation prototypes the tiles' formation records refer to by index.
+        public StrataFormationPrototype[] FormationPrototypes => _formationPrototypes ?? new StrataFormationPrototype[0];
         public float CaveVoxelSize => _caveVoxelSize;
         // How many tiles have holes cut by caves, which sizes a streamed world's hole slots.
         public int HoledTiles => _holedTiles;
@@ -45,8 +48,9 @@ namespace Strata
         public NativeArray<byte> ReadTile(int tile, Allocator allocator) => new(File.ReadAllBytes(TilePath(tile)), allocator);
 
         public void Set(StrataGrid grid, string folder, StrataBandDefinition[] strata, StrataTreePrototype[] treePrototypes,
-                        StrataGrassPrototype[] grassPrototypes, float caveVoxelSize, int holedTiles)
+                        StrataGrassPrototype[] grassPrototypes, float caveVoxelSize, int holedTiles, StrataFormationPrototype[] formationPrototypes)
         {
+            _formationPrototypes = formationPrototypes;
             _caveVoxelSize = caveVoxelSize;
             _holedTiles = holedTiles;
             _grid = grid;

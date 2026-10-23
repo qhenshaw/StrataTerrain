@@ -73,6 +73,13 @@ namespace Strata.Editor
             else world.Trees.Clear();
             Dictionary<int, byte[]> caveData = StrataPreview.Caves.Mesh(world, caves, StrataPreview.AllTiles(grid));
             int caveBricks = StrataPreview.Caves.LastBricks;
+            List<CaveFormations> formations = StrataCaveEvaluator.FormationsOf(nodes);
+            List<StrataFormationPrototype> formationPrototypes = StrataFormationPlacer.Prototypes(formations);
+            world.SetFormationPrototypes(formationPrototypes);
+            Dictionary<int, StrataFormationRecord[]> formationData =
+                StrataPreview.Caves.PlaceFormations(world, formations, formationPrototypes, StrataPreview.AllTiles(grid));
+            long formationCount = 0;
+            foreach (StrataFormationRecord[] records in formationData.Values) formationCount += records?.Length ?? 0;
 
             string dataFolder = $"Strata/{world.name}";
             string tileFolder = StrataWorldData.FolderPath(dataFolder);
@@ -126,7 +133,7 @@ namespace Strata.Editor
                 if (StrataTileFile.Write(StrataWorldData.TilePath(dataFolder, tx, tz), grid.Samples,
                                      heightfield.Heights.Slice(tile * grid.SamplesPerTile, grid.SamplesPerTile),
                                      grid.SplatSamples, indices.Slice(), weights.Slice(), strataMap.Slice(), world.Trees[tile].Records,
-                                     grassPrototypes.Length, grass, StrataCaveEvaluator.Extras(world, tile, caveData[tile]))) written++;
+                                     grassPrototypes.Length, grass, StrataCaveEvaluator.Extras(world, tile, caveData[tile], formationData[tile]))) written++;
                 grass.Dispose();
                 treeCount += world.Trees[tile].Records.Length;
             }
@@ -147,14 +154,15 @@ namespace Strata.Editor
             AssetDatabase.Refresh();
 
             Undo.RecordObject(world, "Bake Strata World");
-            world.Data.Set(grid, dataFolder, strata, prototypes, grassPrototypes, StrataCaveEvaluator.VoxelSize(world), holedTiles);
+            world.Data.Set(grid, dataFolder, strata, prototypes, grassPrototypes, StrataCaveEvaluator.VoxelSize(world), holedTiles,
+                          formationPrototypes.ToArray());
             EditorUtility.SetDirty(world);
             EditorSceneManager.MarkSceneDirty(world.gameObject.scene);
             world.NotifyHeightsChanged();
 
             float mb = (grid.TileCount * StrataTileFile.Size(grid, 0, grassPrototypes.Length) + treeCount * 10L + farBytes) / (1024f * 1024f);
             return $"Strata bake: {grid.TileCount} tiles ({grid}; {written} changed), {treeCount} trees of {prototypes.Length} prototypes, " +
-                   $"{grassPrototypes.Length} grass prototypes, {caveBricks} cave bricks, {holedTiles} holed tiles, {mb:0.#} MB, " +
+                   $"{grassPrototypes.Length} grass prototypes, {caveBricks} cave bricks, {holedTiles} holed tiles, {formationCount} formations, {mb:0.#} MB, " +
                    $"{watch.Elapsed.TotalSeconds:0.00} s, to {tileFolder}; save the scene to keep the baked data";
         }
     }

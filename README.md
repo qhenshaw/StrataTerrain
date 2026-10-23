@@ -42,7 +42,8 @@ Non-destructive tiled terrain for Unity 6 URP (PC, DX12/Vulkan).
   cave's paint and tree effect act on the ground around its entrances (by default clearing trees and grass). Caves that
   reach the surface are also meshed coarsely and switch level by distance (and a streamed world keeps the coarse ones
   for the whole world, so arches are seen from afar); Mouth Carve ramps the ground into a tunnel's ends; **Rock Arch**
-  and **Rock Blob** are the same features adding rock.
+  and **Rock Blob** are the same features adding rock. **Cave Formations** scatters `StrataFormationPrototype` meshes
+  (stalactites, stalagmites, crystals) over the cave floors, ceilings and walls inside its box, drawn instanced.
 - Edits preview live in the editor; **Bake** writes one compact `.bytes` file per tile (heights, splats, trees,
   grass densities, and any cave holes and meshes) and a far file to `StreamingAssets/Strata/<world>/`, and records them in the world's Baked Data
   (save the scene afterwards).

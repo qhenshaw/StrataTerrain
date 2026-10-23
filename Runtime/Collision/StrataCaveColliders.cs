@@ -10,7 +10,9 @@ namespace Strata
     // Collision for the caves inside each active collision chunk: when the terrain's collision activates a chunk, every
     // level 0 cave brick whose footprint meets it gets a pooled MeshCollider of its mesh (baked for PhysX in parallel), on the
     // collision layer under one root, so physics and NavMesh building see caves with the ground; a brick's collider goes
-    // back to the pool once no active chunk needs it. A tile's caves changing rebuilds the colliders over it.
+    // back to the pool once no active chunk needs it. A tile's caves changing rebuilds the colliders over it. Formations
+    // whose prototype collides and whose base is in an active chunk get a MeshCollider of the prototype's mesh, turned
+    // and scaled like the formation.
     public sealed class StrataCaveColliders : IDisposable
     {
         // the bake and the collider must agree, or PhysX cooks the mesh again on assignment
@@ -20,6 +22,9 @@ namespace Strata
                                                                   MeshColliderCookingOptions.UseFastMidphase;
 
         private readonly StrataCaves _caves;
+        private readonly StrataFormations _formations;
+        private readonly Dictionary<int2, List<MeshCollider>> _formationColliders = new();
+        private readonly Stack<MeshCollider> _formationPool = new();
         private readonly StrataCollision _collision;
         private readonly Transform _root;
         private readonly int _layer;
@@ -39,9 +44,11 @@ namespace Strata
         // Colliders came or went within these bounds.
         public event Action<Bounds> Changed;
 
-        public StrataCaveColliders(StrataCaves caves, StrataCollision collision, Transform parent, int layer)
+        public StrataCaveColliders(StrataCaves caves, StrataFormations formations, StrataCollision collision, Transform parent, int layer)
         {
             _caves = caves;
+            _formations = formations;
+            if (formations != null) formations.TileChanged += OnFormationsChanged;
             _collision = collision;
             _layer = layer;
             _root = new GameObject("Strata Cave Colliders") { hideFlags = HideFlags.DontSave }.transform;
@@ -56,11 +63,13 @@ namespace Strata
             if (!_chunks.Add(chunk)) return;
             Bricks(bounds, -1);
             Use(_scratch);
+            AddFormations(chunk, bounds);
         }
 
         private void OnChunkDeactivated(int2 chunk, Bounds bounds)
         {
             if (!_chunks.Remove(chunk)) return;
+            RemoveFormations(chunk);
             Bricks(bounds, -1);
             foreach ((StrataCaves.Brick brick, int _) in _scratch)
             {
@@ -89,6 +98,65 @@ namespace Strata
                 added.AddRange(_scratch);
             }
             Use(added);
+        }
+
+        // Formations changed somewhere: the formation colliders of every active chunk are made again.
+        private void OnFormationsChanged(int tile)
+        {
+            foreach (int2 chunk in _chunks)
+            {
+                RemoveFormations(chunk);
+                AddFormations(chunk, _collision.ChunkBounds(chunk));
+            }
+        }
+
+        private void AddFormations(int2 chunk, Bounds bounds)
+        {
+            if (_formations == null || _formations.Count == 0) return;
+            StrataGrid grid = _formations.Grid;
+            float2 min = new(bounds.min.x, bounds.min.z), max = new(bounds.max.x, bounds.max.z);
+            int2 firstTile = math.clamp((int2)math.floor((min - grid.Origin) / grid.TileSize), 0, new int2(grid.TilesX - 1, grid.TilesZ - 1));
+            int2 lastTile = math.clamp((int2)math.floor((max - grid.Origin) / grid.TileSize), 0, new int2(grid.TilesX - 1, grid.TilesZ - 1));
+            List<MeshCollider> colliders = new();
+            Bounds changed = bounds;
+            for (int tz = firstTile.y; tz <= lastTile.y; tz++)
+            for (int tx = firstTile.x; tx <= lastTile.x; tx++)
+                foreach (StrataFormationRecord record in _formations[grid.TileIndex(tx, tz)])
+                {
+                    StrataFormationPrototype prototype = _formations.Prototypes[record.Prototype];
+                    if (prototype == null || !prototype.Collider || prototype.Mesh == null) continue;
+                    float3 position = record.Position(grid, new int2(tx, tz));
+                    // bases in [min, max) of the chunk, so each formation is in one chunk
+                    if (math.any(position.xz < min) || math.any(position.xz >= max)) continue;
+                    MeshCollider collider = _formationPool.Count > 0 ? _formationPool.Pop() : null;
+                    if (collider == null)
+                    {
+                        GameObject go = new("Formation") { hideFlags = HideFlags.DontSave, layer = _layer };
+                        go.SetActive(false);
+                        go.transform.SetParent(_root, false);
+                        collider = go.AddComponent<MeshCollider>();
+                    }
+                    collider.transform.SetPositionAndRotation(position, record.RotationValue);
+                    collider.transform.localScale = Vector3.one * record.ScaleValue;
+                    collider.gameObject.SetActive(true);
+                    collider.sharedMesh = prototype.Mesh;
+                    colliders.Add(collider);
+                }
+            _formationColliders[chunk] = colliders;
+            if (colliders.Count > 0) Changed?.Invoke(changed);
+        }
+
+        private void RemoveFormations(int2 chunk)
+        {
+            if (!_formationColliders.Remove(chunk, out List<MeshCollider> colliders)) return;
+            foreach (MeshCollider collider in colliders)
+            {
+                if (collider == null) continue;
+                collider.sharedMesh = null;
+                collider.gameObject.SetActive(false);
+                _formationPool.Push(collider);
+            }
+            if (colliders.Count > 0) Changed?.Invoke(_collision.ChunkBounds(chunk));
         }
 
         // Counts a chunk's use of bricks, building colliders for those that had none.
@@ -189,6 +257,9 @@ namespace Strata
             _collision.ChunkActivated -= OnChunkActivated;
             _collision.ChunkDeactivated -= OnChunkDeactivated;
             _caves.TileChanged -= OnTileChanged;
+            if (_formations != null) _formations.TileChanged -= OnFormationsChanged;
+            _formationColliders.Clear();
+            _formationPool.Clear();
             if (_root != null) UnityEngine.Object.Destroy(_root.gameObject);
             _active.Clear();
             _pool.Clear();

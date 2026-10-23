@@ -88,6 +88,9 @@ namespace Strata.Editor
             feature.ApplyModifiedPropertiesWithoutUndo();
         }
 
+        [MenuItem("GameObject/Strata/Cave Formations", false, 33)]
+        private static void CreateCaveFormations(MenuCommand command) => CreateFeature<CaveFormations>("Cave Formations", command);
+
         // last, so it sees the finished heights and splats and features above it can't change it
         [MenuItem("GameObject/Strata/Tree Scatter", false, 27)]
         private static void CreateTreeScatter(MenuCommand command) => CreateFeature<TreeScatter>("Tree Scatter", command).transform.SetAsLastSibling();

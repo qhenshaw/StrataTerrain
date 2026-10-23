@@ -9,7 +9,7 @@ namespace Strata
     // layers it paints with, and what the last bake produced. It owns the heightfield, trees and grass densities (loaded
     // from the baked data, or flat and bare until the first bake), draws them with a StrataTerrainRenderer, a
     // StrataTreeRenderer and a StrataGrassRenderer (which generates grass on the GPU per camera) in edit and play mode,
-    // and its baked caves with StrataCaves, and in play mode streams terrain, tree trunk and cave collision around the
+    // and its baked caves with StrataCaves and their formations with StrataFormations, and in play mode streams terrain, tree trunk and cave collision around the
     // registered focus transforms and StrataFocus components. Authoring features (stamps, splines, filters, caves) live
     // under this object in the hierarchy; the editor evaluates them for the live preview and the bake.
     [ExecuteAlways, DisallowMultipleComponent]
@@ -59,6 +59,7 @@ namespace Strata
         public StrataTreeColliders TreeColliders { get; private set; }
         public StrataGrassMap Grass { get; private set; }
         public StrataCaves Caves { get; private set; }
+        public StrataFormations Formations { get; private set; }
         public StrataCaveColliders CaveColliders { get; private set; }
         // Streams tiles in play mode (null when every tile is resident).
         public StrataStreamer Streamer { get; private set; }
@@ -157,6 +158,15 @@ namespace Strata
             }
             Renderer = new StrataTerrainRenderer(Heightfield, material, _settings.LodDistanceRatio) { CastShadows = _castShadows, Layer = gameObject.layer };
             BuildCaves(material, baked && !stream);
+            Formations = new StrataFormations(_settings.Grid) { Layer = gameObject.layer, CastShadows = _castShadows && _settings.CaveShadows };
+            Formations.SetPrototypes(baked ? _data.FormationPrototypes : Array.Empty<StrataFormationPrototype>());
+            if (baked && !stream)
+                for (int tile = 0; tile < _settings.Grid.TileCount; tile++)
+                {
+                    Unity.Collections.NativeArray<byte> file = _data.ReadTile(tile, Unity.Collections.Allocator.Temp);
+                    Formations.SetTile(tile, file, _settings.Grid.SplatSamples);
+                    file.Dispose();
+                }
             if (stream) Caves?.LoadFar(_data.FarCavesPath);
             if (_material == null) DestroyImmediate(material);
             RebuildPalette();
@@ -175,13 +185,13 @@ namespace Strata
                 if (baked && !stream) Grass.Load(_data);
             }
             if (stream)
-                Streamer = new StrataStreamer(_data, Heightfield, Splatmap, Grass, Trees, Caves, _settings.StreamingRadius,
+                Streamer = new StrataStreamer(_data, Heightfield, Splatmap, Grass, Trees, Caves, Formations, _settings.StreamingRadius,
                                               _settings.CollisionRadius + _settings.CollisionChunkSize, _settings.MaxConcurrentLoads);
             if (Application.isPlaying)
             {
                 Collision = new StrataCollision(Heightfield, transform, _settings.CollisionChunkSize, _settings.CollisionRadius, _settings.CollisionLayer);
                 TreeColliders = new StrataTreeColliders(Trees, Collision, transform, _settings.CollisionLayer);
-                if (Caves != null) CaveColliders = new StrataCaveColliders(Caves, Collision, transform, _settings.CollisionLayer);
+                if (Caves != null) CaveColliders = new StrataCaveColliders(Caves, Formations, Collision, transform, _settings.CollisionLayer);
             }
             Rebuilt?.Invoke();
         }
@@ -209,6 +219,10 @@ namespace Strata
                 file.Dispose();
             }
         }
+
+        // The formation prototypes the formation records refer to (from the bake, or set live by the editor preview);
+        // every tile's formations are cleared.
+        public void SetFormationPrototypes(IReadOnlyList<StrataFormationPrototype> prototypes) => Formations?.SetPrototypes(prototypes);
 
         // The rock strata definitions the strata map refers to (from the bake, or set live by the editor preview).
         public IReadOnlyList<StrataBandDefinition> StrataDefinitions { get; private set; } = Array.Empty<StrataBandDefinition>();
@@ -280,6 +294,7 @@ namespace Strata
             TreeColliders?.Dispose();
             Collision?.Dispose();
             Caves?.Dispose();
+            Formations?.Dispose();
             if (_caveInstance != null) DestroyImmediate(_caveInstance);
             TreeRenderer?.Dispose();
             Trees?.Dispose();
@@ -293,6 +308,7 @@ namespace Strata
             TreeColliders = null;
             Collision = null;
             Caves = null;
+            Formations = null;
             _caveInstance = null;
             TreeRenderer = null;
             Trees = null;
@@ -352,6 +368,7 @@ namespace Strata
                     world.Caves.UndergroundDistance = world._settings.CaveUndergroundDistance;
                     world.Caves.Select(camera.transform.position);
                 }
+                world.Formations?.Draw(camera);
                 if (world.TreeRenderer == null) continue;
                 world.TreeRenderer.DistanceScale = world._settings.TreeDistanceScale;
                 world.TreeRenderer.Refresh();

@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.12.1
+- Bake Probes now really bakes against the caves: their probe proxies were merged with `CombineMeshes`, which drops
+  the vertices of the cave meshes' compressed formats, so the proxies were empty (no probes placed around caves, no
+  occlusion in them or under arches). They are merged by hand into plain float positions and normals.
+
+## 0.12.0
+Cave formations.
+- `StrataFormationPrototype` assets: a mesh growing up +Y from its base, instancing-capable materials, the surface it
+  grows on (floor, ceiling or wall), how far it leans towards the surface's normal, scale range, sink, draw distance,
+  shadows and an optional mesh collider. **Tools > Strata > Generate Example Formations** makes a stalactite, a
+  stalagmite and a crystal cluster to test with.
+- The **Cave Formations** feature (GameObject > Strata) scatters its entries' prototypes at a density per 100 square
+  metres over the cave surfaces inside its box. Placement runs on the level 0 cave meshes, each triangle's formations
+  hashed from its own centre, so bakes are repeatable; the ground around cave mouths gets none.
+- Tiles store their formations as 16-byte `StrataFormationRecord`s (flag Formations) and Baked Data the prototypes.
+  `StrataFormations` draws them with `Graphics.RenderMeshInstanced` per camera, culled by frustum and draw distance
+  in 64 m cells, and `StrataCaveColliders` gives colliding ones a MeshCollider in active collision chunks (runtime
+  collider meshes must be readable). The live preview places them again with the caves, or when a Cave Formations
+  feature changes.
+
 ## 0.11.0
 Cave detail levels, rock and mouths.
 - Regions of caves that reach the surface (a level 2 brick, 128 cells across) are also meshed at twice and four times

@@ -51,6 +51,8 @@ namespace Strata.Editor
             if (world.Caves != null && (world.Caves.BrickCount > 0 || world.Heightfield.Holes.HoledCount > 0))
             {
                 EditorGUILayout.LabelField("Caves", $"{world.Caves.BrickCount} bricks, {world.Caves.TriangleCount} triangles, {world.Heightfield.Holes.HoledCount} holed tiles");
+                if (world.Formations != null && world.Formations.Count > 0)
+                    EditorGUILayout.LabelField("Formations", $"{world.Formations.Count} of {world.Formations.Prototypes.Count} prototypes");
                 EditorGUILayout.LabelField("Last Cave Preview", $"{StrataPreview.LastCaveMilliseconds:0.0} ms ({StrataPreview.Caves.LastMilliseconds:0.0} ms meshing)");
             }
             if (world.Grass != null)

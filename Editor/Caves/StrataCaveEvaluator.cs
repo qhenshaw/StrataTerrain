@@ -475,13 +475,77 @@ namespace Strata.Editor
             }
         }
 
+        public static List<CaveFormations> FormationsOf(List<StrataEvaluator.Node> nodes) =>
+            StrataEvaluator.Flatten(nodes).OfType<CaveFormations>().ToList();
+
+        // Places the formations on the given tiles' level 0 caves (meshed by an earlier Mesh), with the prototype list the
+        // records index, shows them in the world, and returns each tile's records (null for none).
+        public Dictionary<int, StrataFormationRecord[]> PlaceFormations(StrataWorld world, List<CaveFormations> formations,
+                                                                         List<StrataFormationPrototype> prototypes, IEnumerable<int> tiles)
+        {
+            StrataGrid grid = world.Heightfield.Grid;
+            HashSet<int> wanted = new(tiles);
+            Dictionary<int, StrataFormationRecord[]> result = new();
+            foreach (int tile in wanted) result[tile] = null;
+            StrataFormationPlacer.Inputs(formations, prototypes, out NativeArray<StrataFormationPlacer.Box> boxes, out NativeArray<StrataFormationPlacer.Entry> entries);
+            if (boxes.Length > 0 && _bricksWorld == world)
+            {
+                List<int3> coords = new();
+                foreach ((int level, int3 coord) in _bricks.Keys)
+                    if (level == 0 && wanted.Contains(StrataCaveData.BrickTile(grid, _bricksVoxel, coord, 0))) coords.Add(coord);
+                coords.Sort(LatticeOrder);
+                List<(int3 Coord, StrataFormationPlacer.PlaceJob Job)> jobs = new();
+                List<JobHandle> handles = new();
+                foreach (int3 coord in coords)
+                {
+                    Meshed brick = _bricks[(0, coord)];
+                    if (brick.Indices.Length == 0) continue;
+                    StrataFormationPlacer.PlaceJob job = new()
+                    {
+                        Vertices = new NativeArray<StrataCaveData.Vertex>(brick.Vertices, Allocator.TempJob),
+                        Indices = new NativeArray<ushort>(brick.Indices, Allocator.TempJob),
+                        Origin = StrataCaveData.BrickOrigin(grid, _bricksVoxel, coord, 0),
+                        Cell = _bricksVoxel,
+                        Boxes = boxes,
+                        Entries = entries,
+                        Output = new NativeList<StrataFormationPlacer.Placed>(0, Allocator.TempJob)
+                    };
+                    jobs.Add((coord, job));
+                    handles.Add(job.Schedule());
+                }
+                NativeArray<JobHandle> all = new(handles.ToArray(), Allocator.Temp);
+                JobHandle.CompleteAll(all);
+                all.Dispose();
+                Dictionary<int, List<StrataFormationRecord>> perTile = new();
+                foreach ((int3 coord, StrataFormationPlacer.PlaceJob job) in jobs)
+                {
+                    int tile = StrataCaveData.BrickTile(grid, _bricksVoxel, coord, 0);
+                    int2 tileCoord = new(tile % grid.TilesX, tile / grid.TilesX);
+                    if (!perTile.TryGetValue(tile, out List<StrataFormationRecord> list)) perTile[tile] = list = new();
+                    foreach (StrataFormationPlacer.Placed placed in job.Output)
+                        list.Add(StrataFormationRecord.Pack(grid, tileCoord, placed.Position, placed.Rotation, placed.Scale, placed.Prototype));
+                    job.Vertices.Dispose();
+                    job.Indices.Dispose();
+                    job.Output.Dispose();
+                }
+                foreach ((int tile, List<StrataFormationRecord> list) in perTile)
+                    if (list.Count > 0) result[tile] = list.ToArray();
+            }
+            boxes.Dispose();
+            entries.Dispose();
+            if (world.Formations != null)
+                foreach ((int tile, StrataFormationRecord[] records) in result)
+                    world.Formations.SetTile(tile, records ?? Array.Empty<StrataFormationRecord>());
+            return result;
+        }
+
         // A tile's holes as its file stores them: the rectangle of its samples that aren't plainly solid, and their
         // presence; null when it has no hole.
-        public static StrataTileExtras Extras(StrataWorld world, int tile, byte[] caves)
+        public static StrataTileExtras Extras(StrataWorld world, int tile, byte[] caves, StrataFormationRecord[] formations = null)
         {
             StrataHoles holes = world.Heightfield.Holes;
             StrataGrid grid = world.Heightfield.Grid;
-            StrataTileExtras extras = new() { Caves = caves };
+            StrataTileExtras extras = new() { Caves = caves, Formations = formations };
             int slot = holes.TileSlots[tile];
             if (slot >= 0)
             {

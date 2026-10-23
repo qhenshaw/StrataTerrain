@@ -376,13 +376,26 @@ namespace Strata.Editor
         private static Mesh CaveMesh(StrataWorld world, int tile)
         {
             if (world.Caves == null || world.Caves[tile].Count == 0) return null;
-            // level 0 only: the coarse levels cover the same rock
-            List<CombineInstance> parts = new();
+            // level 0 only: the coarse levels cover the same rock. Merged by hand into plain float positions and normals:
+            // CombineMeshes drops the vertices of the bricks' compressed formats, and the baker wants plain data anyway.
+            List<Vector3> vertices = new(), normals = new(), brickVertices = new(), brickNormals = new();
+            List<int> triangles = new(), brickTriangles = new();
             foreach (StrataCaves.Brick brick in world.Caves[tile])
-                if (brick.Level == 0)
-                    parts.Add(new CombineInstance { mesh = brick.Mesh, transform = Matrix4x4.Translate(brick.Origin) });
+            {
+                if (brick.Level != 0) continue;
+                int first = vertices.Count;
+                brick.Mesh.GetVertices(brickVertices);
+                brick.Mesh.GetNormals(brickNormals);
+                brick.Mesh.GetTriangles(brickTriangles, 0);
+                foreach (Vector3 vertex in brickVertices) vertices.Add(vertex + brick.Origin);
+                normals.AddRange(brickNormals);
+                foreach (int index in brickTriangles) triangles.Add(first + index);
+            }
+            if (triangles.Count == 0) return null;
             Mesh mesh = new() { name = $"Strata Probe Caves {tile}", hideFlags = HideFlags.DontSave, indexFormat = IndexFormat.UInt32 };
-            mesh.CombineMeshes(parts.ToArray(), true, true);
+            mesh.SetVertices(vertices);
+            mesh.SetNormals(normals);
+            mesh.SetTriangles(triangles, 0);
             mesh.RecalculateBounds();
             return mesh;
         }
