@@ -13,9 +13,11 @@ namespace Strata
     // data is a header (magic "STR2", voxel size, brick count), a table of bricks (lattice coordinate at its level, level
     // and flags, vertex and index counts), then each brick's vertices and its indices (16-bit, padded to four bytes).
     // A vertex is 16 bytes: its position in the brick's frame (a box four cells wider than the brick on every side) as
-    // 16-bit fractions, its normal as signed bytes, and four bytes of surface: the wall and floor layer (255 for the
-    // ground's own), how much it is floor, and how much it blends into the ground's layers near the surface. Data from
-    // before levels (magic "STRC") reads as level 0 bricks that all reach the surface.
+    // 16-bit fractions, then in W the wall and floor layer of the second biome where two biomes blend, its normal as
+    // signed bytes with the second biome's share (7 bits) and a flag for rock that follows the surface biomes in the
+    // fourth byte, and four bytes of surface: the wall and floor layer (255 for the ground's own), how much it is floor,
+    // and how much it blends into the ground's layers near the surface. Older data has zero in W and the fourth byte, so
+    // it reads as one biome. Data from before levels (magic "STRC") reads as level 0 bricks that all reach the surface.
     public static class StrataCaveData
     {
         public const int BrickCells = 32;
@@ -85,7 +87,7 @@ namespace Strata
             return grid.TileIndex(tile.x, tile.y);
         }
 
-        public static Vertex Pack(float3 local, float3 normal, uint surface, float cell)
+        public static Vertex Pack(float3 local, float3 normal, uint2 surface, float cell)
         {
             float3 frame = math.saturate((local / cell + FramePadding) / FrameCells) * 65535f;
             int3 n = (int3)math.round(math.clamp(normal, -1f, 1f) * 127f);
@@ -94,8 +96,9 @@ namespace Strata
                 X = (ushort)math.round(frame.x),
                 Y = (ushort)math.round(frame.y),
                 Z = (ushort)math.round(frame.z),
-                Normal = (uint)(n.x & 0xff) | (uint)(n.y & 0xff) << 8 | (uint)(n.z & 0xff) << 16,
-                Surface = surface
+                W = (ushort)(surface.y & 0xffff),
+                Normal = (uint)(n.x & 0xff) | (uint)(n.y & 0xff) << 8 | (uint)(n.z & 0xff) << 16 | (surface.y >> 16 & 0xff) << 24,
+                Surface = surface.x
             };
         }
 
@@ -109,6 +112,18 @@ namespace Strata
         public static uint PackSurface(int wall, int floor, float floorWeight, float blend) =>
             (uint)(wall < 0 ? NoLayer : math.min(wall, 254)) | (uint)(floor < 0 ? NoLayer : math.min(floor, 254)) << 8 |
             (uint)math.round(math.saturate(floorWeight) * 255f) << 16 | (uint)math.round(math.saturate(blend) * 255f) << 24;
+
+        // The second biome's wall and floor layer, its share, and whether the rock follows the surface biomes, for Pack.
+        public static uint PackBiome(int wall, int floor, float weight, bool surfaceBiome) =>
+            (uint)(wall < 0 ? NoLayer : math.min(wall, 254)) | (uint)(floor < 0 ? NoLayer : math.min(floor, 254)) << 8 |
+            (uint)math.round(math.saturate(weight) * 127f) << 16 | (surfaceBiome ? 1u : 0u) << 23;
+
+        // A vertex's second biome as four bytes for the mesh: wall and floor layer, its share (0..255) and the surface flag.
+        public static uint UnpackBiome(Vertex vertex) =>
+            vertex.W | (uint)math.round((vertex.Normal >> 24 & 0x7f) * (255f / 127f)) << 16 | (vertex.Normal >> 31) << 24;
+
+        // Whether a vertex's rock follows the surface biomes (rock an add feature makes) rather than the underground ones.
+        public static bool SurfaceBiome(Vertex vertex) => vertex.Normal >> 31 != 0;
 
         public static byte[] Encode(float voxel, IReadOnlyList<Source> bricks)
         {

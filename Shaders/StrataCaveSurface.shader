@@ -48,12 +48,14 @@ Shader "Strata/CaveSurface"
         #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
         #include "StrataCommon.hlsl"
 
-        // the layer bytes (wall, floor) and weights (floor, ground blend) of StrataCaveData's vertices
+        // the layer bytes (wall, floor) and weights (floor, ground blend) of StrataCaveData's vertices, and the second
+        // biome's layers (wall, floor) and share where two biomes blend
         struct Attributes
         {
             float4 positionOS : POSITION;
             float3 normalOS : NORMAL;
             float4 surface : TEXCOORD0;
+            float4 biome : TEXCOORD1;
             UNITY_VERTEX_INPUT_INSTANCE_ID
         };
         ENDHLSL
