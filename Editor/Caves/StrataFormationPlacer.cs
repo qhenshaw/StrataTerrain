@@ -85,7 +85,7 @@ namespace Strata.Editor
                             if (entry.Surface != surface || entry.Density <= 0f) continue;
                             uint seed = math.hash(new uint4(key, box.Seed ^ ((uint)e * 0x9e3779b9u)));
                             float expected = area * entry.Density;
-                            if (entry.Filtered) expected *= Gate(entry, centre);
+                            if (entry.Filtered) expected *= Gate(entry, centre, StrataCaveData.SurfaceBiome(va));
                             int count = (int)expected + (Unit(seed, 0) < expected - (int)expected ? 1 : 0);
                             for (int k = 0; k < count; k++)
                             {
@@ -108,11 +108,12 @@ namespace Strata.Editor
                 }
             }
 
-            // the entry's biome filter at a point, blended by the two strongest underground biomes there
-            private float Gate(Entry entry, float3 p)
+            // the entry's biome filter at a point, blended by the two strongest biomes there: underground, or surface on
+            // rock an add feature makes
+            private float Gate(Entry entry, float3 p, bool surface)
             {
                 if (!Biomes.IsCreated) return 0f;
-                uint texel = Biomes.Sample(p.xz, true);
+                uint texel = Biomes.Sample(p.xz, !surface);
                 float w0 = ((texel >> 16) & 0xff) / 255f;
                 float g0 = StrataBiomeFilter.MaskAllows(entry.MaskLow, entry.MaskHigh, (int)(texel & 0xff)) ? 1f : 0f;
                 float g1 = StrataBiomeFilter.MaskAllows(entry.MaskLow, entry.MaskHigh, (int)((texel >> 8) & 0xff)) ? 1f : 0f;

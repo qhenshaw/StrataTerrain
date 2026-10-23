@@ -28,7 +28,8 @@ namespace Strata
         {
             new(VertexAttribute.Position),
             new(VertexAttribute.Normal, VertexAttributeFormat.SNorm8, 4),
-            new(VertexAttribute.TexCoord0, VertexAttributeFormat.UNorm8, 4)
+            new(VertexAttribute.TexCoord0, VertexAttributeFormat.UNorm8, 4),
+            new(VertexAttribute.TexCoord1, VertexAttributeFormat.UNorm8, 4)
         };
 
         // A brick's mesh and renderer; the mesh is relative to Origin, the brick's minimum corner.
@@ -57,6 +58,7 @@ namespace Strata
             public float3 Position;
             public uint Normal;
             public uint Surface;
+            public uint Biome;
         }
 
         private readonly StrataGrid _grid;
@@ -373,7 +375,8 @@ namespace Strata
                 StrataCaveData.Vertex* source = (StrataCaveData.Vertex*)(bytes + Brick.VertexOffset);
                 NativeArray<MeshVertex> vertices = Mesh.GetVertexData<MeshVertex>();
                 for (int i = 0; i < Brick.VertexCount; i++)
-                    vertices[i] = new MeshVertex { Position = StrataCaveData.Unpack(source[i], Cell), Normal = source[i].Normal, Surface = source[i].Surface };
+                    vertices[i] = new MeshVertex { Position = StrataCaveData.Unpack(source[i], Cell), Normal = source[i].Normal, Surface = source[i].Surface,
+                                                 Biome = StrataCaveData.UnpackBiome(source[i]) };
                 NativeArray<ushort> indices = Mesh.GetIndexData<ushort>();
                 UnsafeUtility.MemCpy(indices.GetUnsafePtr(), bytes + Brick.IndexOffset, Brick.IndexCount * 2L);
             }

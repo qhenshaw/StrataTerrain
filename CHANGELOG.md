@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.14.1
+- Cave walls and floors blend smoothly between biomes instead of dithering per vertex: each vertex keeps the layers of
+  both biomes where two meet (ordered by biome index, so neighbours agree) and the second one's share, taken from the
+  biome map's four nearest texels, and the cave shader blends them per pixel. A biome without a cave layer gives way to
+  the ground's splats across the blend instead of switching at its edge. The second biome goes in the vertex's spare
+  bytes (W and the normal's fourth byte), so the cave format is unchanged and older bakes read as one biome.
+- Rock an Add feature makes (Rock Arch, Rock Blob) follows the surface biomes, not the underground ones, for its biome
+  layers and for the cave formations on it. Re-bake to apply both.
+
 ## 0.14.0
 - Rendering layers: the world's Settings have Terrain Rendering Layers and Cave Rendering Layers, and tree and
   formation prototypes a Rendering Layers mask, so light layers and screen-space effects that mask by rendering layers

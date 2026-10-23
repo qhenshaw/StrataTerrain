@@ -18,6 +18,8 @@ struct Varyings
     nointerpolation float2 layers : TEXCOORD2;
     float2 weights : TEXCOORD3;
     float fogFactor : TEXCOORD4;
+    nointerpolation float2 layersB : TEXCOORD5;
+    float biomeWeight : TEXCOORD6;
     UNITY_VERTEX_INPUT_INSTANCE_ID
 };
 
@@ -31,26 +33,33 @@ Varyings Vert(Attributes input)
     output.positionCS = TransformWorldToHClip(output.positionWS);
     output.layers = input.surface.xy;
     output.weights = input.surface.zw;
+    output.layersB = input.biome.xy;
+    output.biomeWeight = input.biome.z;
     output.fogFactor = ComputeFogFactor(output.positionCS.z);
     return output;
 }
 
-// The wall and floor layers (as much floor as the vertex says), giving way near the surface to the ground's own splat
-// layers; a vertex with no wall layer shows only the ground's.
-StrataLayers CaveLayers(float2 ids, float2 weights, float3 positionWS)
+// The wall and floor layers (as much floor as the vertex says), blended with the second biome's by its share where two
+// biomes meet, giving way near the surface to the ground's own splat layers; a biome with no wall layer shows the
+// ground's instead.
+StrataLayers CaveLayers(float2 ids, float2 idsB, float biomeWeight, float2 weights, float3 positionWS)
 {
     StrataLayers layers;
     layers.index = -1;
     layers.weight = 0.0;
     int wall = (int)round(ids.x * 255.0);
     int floorLayer = (int)round(ids.y * 255.0);
-    float blend = wall == 255 ? 1.0 : weights.y;
+    int wallB = (int)round(idsB.x * 255.0);
+    int floorB = (int)round(idsB.y * 255.0);
     if (floorLayer == 255) floorLayer = wall;
-    if (blend < 0.999)
-    {
-        AddLayer(layers, wall, (1.0 - weights.x) * (1.0 - blend));
-        AddLayer(layers, floorLayer, weights.x * (1.0 - blend));
-    }
+    if (floorB == 255) floorB = wallB;
+    float a = wall == 255 ? 0.0 : (1.0 - biomeWeight) * (1.0 - weights.y);
+    float b = wallB == 255 ? 0.0 : biomeWeight * (1.0 - weights.y);
+    AddLayer(layers, wall, (1.0 - weights.x) * a);
+    AddLayer(layers, floorLayer, weights.x * a);
+    AddLayer(layers, wallB, (1.0 - weights.x) * b);
+    AddLayer(layers, floorB, weights.x * b);
+    float blend = 1.0 - a - b;
     if (blend > 0.001)
     {
         StrataLayers ground = StrataSplat(positionWS.xz);
@@ -67,7 +76,7 @@ bool StrataCaveInput(Varyings input, out InputData inputData, out SurfaceData su
 {
     float3 geometricNormal = normalize(input.normalWS);
     float distance = length(GetCameraPositionWS() - input.positionWS);
-    StrataLayers layers = CaveLayers(input.layers, input.weights, input.positionWS);
+    StrataLayers layers = CaveLayers(input.layers, input.layersB, input.biomeWeight, input.weights, input.positionWS);
     // triplanar inside, projected like the terrain where it blends into the ground
     StrataSurfaceOutput surface = StrataSurfaceWith(layers, StrataRockAt(input.positionWS.xz), input.positionWS, geometricNormal,
                                                     distance, 1.0 - input.weights.y);

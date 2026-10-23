@@ -183,14 +183,14 @@ namespace Strata.Editor
                 {
                     NativeList<float3> positions = new(count, Allocator.Temp);
                     NativeList<float3> normals = new(count, Allocator.Temp);
-                    NativeList<uint> surfaces = new(count, Allocator.Temp);
+                    NativeList<uint2> surfaces = new(count, Allocator.Temp);
                     NativeList<bool> features = new(count, Allocator.Temp);
                     bool exposed = false;
                     for (int i = 0; i < cells.Length; i++)
                     {
                         if (cells[i] < 0) continue;
                         int3 local = new(i % CellSide - 1, i / CellSide % CellSide - 1, i / (CellSide * CellSide) - 1);
-                        Finish(scope, CellVertex(local, values), out float3 position, out float3 normal, out uint surface, out bool feature, out bool near);
+                        Finish(scope, CellVertex(local, values), out float3 position, out float3 normal, out uint2 surface, out bool feature, out bool near);
                         positions.Add(position);
                         normals.Add(normal);
                         surfaces.Add(surface);
@@ -241,7 +241,7 @@ namespace Strata.Editor
             }
 
             // Extrudes every open edge (used by one triangle) a cell into the rock, as a quad drawn from both sides.
-            private void AddSkirts(NativeList<float3> positions, NativeList<float3> normals, NativeList<uint> surfaces, NativeList<int> indices)
+            private void AddSkirts(NativeList<float3> positions, NativeList<float3> normals, NativeList<uint2> surfaces, NativeList<int> indices)
             {
                 int triangles = indices.Length;
                 NativeHashMap<long, int> uses = new(triangles, Allocator.Temp);
@@ -268,7 +268,7 @@ namespace Strata.Editor
                 lowered.Dispose();
             }
 
-            private int Lower(int vertex, NativeList<float3> positions, NativeList<float3> normals, NativeList<uint> surfaces, NativeHashMap<int, int> lowered)
+            private int Lower(int vertex, NativeList<float3> positions, NativeList<float3> normals, NativeList<uint2> surfaces, NativeHashMap<int, int> lowered)
             {
                 if (lowered.TryGetValue(vertex, out int existing)) return existing;
                 int index = positions.Length;
@@ -306,7 +306,7 @@ namespace Strata.Editor
 
             // A vertex's final position, normal and surface; feature if a feature (not the ground) shapes it, near if it is
             // close enough to the ground's surface to be seen from outside.
-            private void Finish(in StrataCaveField.Scope scope, float3 p, out float3 position, out float3 normal, out uint surface, out bool feature, out bool near)
+            private void Finish(in StrataCaveField.Scope scope, float3 p, out float3 position, out float3 normal, out uint2 surface, out bool feature, out bool near)
             {
                 float scale = Field.Ground(p.xz, out float height, out float2 gradient);
                 float ground = (p.y - height) * scale;
@@ -329,21 +329,31 @@ namespace Strata.Editor
 
                 int wall = -1, floor = -1;
                 float floorWeight = 0f;
+                // the second biome's layers and share where two biomes blend
+                int wallB = -1, floorB = -1;
+                float biomeWeight = 0f;
+                bool surfaceBiome = false;
                 if (dominant >= 0)
                 {
                     StrataCaveShape shape = Field.Shapes[dominant];
-                    wall = shape.WallLayer;
-                    floor = shape.FloorLayer;
+                    wall = wallB = shape.WallLayer;
+                    floor = floorB = shape.FloorLayer;
                     if (shape.WallOptions + shape.FloorOptions > 0)
                     {
-                        int biome = Field.UndergroundBiome(p);
-                        wall = Field.PickLayer(shape.FirstOption, shape.WallOptions, biome, shape.WallLayer);
-                        floor = Field.PickLayer(shape.FirstOption + shape.WallOptions, shape.FloorOptions, biome, shape.ExplicitFloor ? shape.FloorLayer : wall);
+                        // rock a feature adds stands in the open, so it follows the surface biomes, not the underground ones
+                        surfaceBiome = shape.Operation == StrataCaveOperation.Add;
+                        Field.BiomePair(p, !surfaceBiome, out int a, out int b, out biomeWeight);
+                        int floorOptions = shape.FirstOption + shape.WallOptions;
+                        wall = Field.PickLayer(shape.FirstOption, shape.WallOptions, a, shape.WallLayer);
+                        floor = Field.PickLayer(floorOptions, shape.FloorOptions, a, shape.ExplicitFloor ? shape.FloorLayer : wall);
+                        wallB = Field.PickLayer(shape.FirstOption, shape.WallOptions, b, shape.WallLayer);
+                        floorB = Field.PickLayer(floorOptions, shape.FloorOptions, b, shape.ExplicitFloor ? shape.FloorLayer : wallB);
                     }
                     floorWeight = math.saturate((normal.y - (shape.FloorCos - 0.1f)) / 0.2f);
                 }
                 position = p;
-                surface = StrataCaveData.PackSurface(wall, floor, floorWeight, blend);
+                surface = new uint2(StrataCaveData.PackSurface(wall, floor, floorWeight, blend),
+                                    StrataCaveData.PackBiome(wallB, floorB, biomeWeight, surfaceBiome));
                 feature = dominant >= 0;
                 near = blend > 0f;
             }

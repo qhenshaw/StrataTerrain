@@ -10,7 +10,8 @@ namespace Strata.Editor
     // minimum over its primitives (tapered elliptical tubes and ellipsoids) plus world-anchored value noise. Everything
     // is evaluated at world positions computed the same way wherever they are shared, so neighbouring bricks and tiles
     // get bit-identical values and the meshes meet exactly. Shapes with biome layer options pick their wall and floor
-    // layers from the underground biome map, dithering between the two strongest biomes where they blend.
+    // layers for the two strongest biomes (underground, or surface for rock an add feature makes) and the weight between
+    // them, which the cave shader blends.
     public struct StrataCaveField
     {
         public const float Far = 1e6f;
@@ -44,14 +45,73 @@ namespace Strata.Editor
             }
         }
 
-        // The underground biome at a point: one of the two strongest there, picked by a hash of the point (in quarter
-        // metres) with odds by their weights, so a blend between biomes becomes a speckled mix of their layers.
-        public int UndergroundBiome(float3 p)
+        // The two strongest biomes at a point, from the biome map's four nearest texels blended bilinearly so the weight
+        // changes smoothly between them. a is the lower biome index and b the higher, so neighbouring points in one blend
+        // agree on which is which; weight is b's share (0, with b = a, where only one biome is present).
+        public void BiomePair(float3 p, bool underground, out int a, out int b, out float weight)
         {
-            if (!Biomes.IsCreated) return StrataBiomeMap.None;
-            uint texel = Biomes.Sample(p.xz, true);
-            uint roll = math.hash((uint3)(int3)math.round(p * 4f)) & 0xffu;
-            return (int)(roll < ((texel >> 16) & 0xff) ? texel & 0xff : (texel >> 8) & 0xff);
+            a = b = StrataBiomeMap.None;
+            weight = 0f;
+            if (!Biomes.IsCreated) return;
+            StrataGrid grid = Biomes.Grid;
+            float spacing = grid.TileSize / grid.SplatResolution;
+            float2 f = (p.xz - grid.Origin) / spacing;
+            float2 cell = math.floor(f), t = f - cell;
+            int4 ids = -1;
+            float4 weights = 0f;
+            for (int k = 0; k < 4; k++)
+            {
+                int2 corner = new(k & 1, k >> 1);
+                float share = (corner.x == 1 ? t.x : 1f - t.x) * (corner.y == 1 ? t.y : 1f - t.y);
+                uint texel = Biomes.Sample(grid.Origin + (cell + corner) * spacing, underground);
+                float first = ((texel >> 16) & 0xff) / 255f;
+                Accumulate(ref ids, ref weights, (int)(texel & 0xff), share * first);
+                Accumulate(ref ids, ref weights, (int)((texel >> 8) & 0xff), share * (1f - first));
+            }
+            int top = 0, second = -1;
+            for (int k = 1; k < 4; k++)
+            {
+                if (weights[k] > weights[top])
+                {
+                    second = top;
+                    top = k;
+                }
+                else if (weights[k] > 0f && (second < 0 || weights[k] > weights[second])) second = k;
+            }
+            a = b = ids[top] < 0 ? StrataBiomeMap.None : ids[top];
+            if (second < 0) return;
+            int other = ids[second];
+            float otherShare = weights[second] / (weights[top] + weights[second]);
+            if (other < a)
+            {
+                b = a;
+                a = other;
+                weight = 1f - otherShare;
+            }
+            else
+            {
+                b = other;
+                weight = otherShare;
+            }
+        }
+
+        private static void Accumulate(ref int4 ids, ref float4 weights, int id, float weight)
+        {
+            if (weight <= 0f) return;
+            for (int k = 0; k < 4; k++)
+            {
+                if (ids[k] == id)
+                {
+                    weights[k] += weight;
+                    return;
+                }
+                if (ids[k] < 0)
+                {
+                    ids[k] = id;
+                    weights[k] = weight;
+                    return;
+                }
+            }
         }
 
         // The first of count options from first whose biomes hold the biome, else the fallback.
