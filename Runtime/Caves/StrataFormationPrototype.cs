@@ -32,6 +32,8 @@ namespace Strata
         [Tooltip("How far it is drawn, in metres.")]
         [SerializeField, Min(1f)] private float _drawDistance = 80f;
         [SerializeField] private bool _castShadows = true;
+        [Tooltip("Rendering layers it draws on (for light layers and screen-space effects that mask by them).")]
+        [SerializeField] private RenderingLayerMask _renderingLayers = RenderingLayerMask.defaultRenderingLayerMask;
         [Tooltip("Collides as its mesh, turned and scaled like each instance.")]
         [SerializeField] private bool _collider;
 
@@ -44,6 +46,7 @@ namespace Strata
         public float Sink => _sink;
         public float DrawDistance => _drawDistance;
         public bool CastShadows => _castShadows;
+        public uint RenderingLayers => _renderingLayers;
         public bool Collider => _collider;
         public bool IsValid => _mesh != null && _materials != null && _materials.Length > 0;
     }

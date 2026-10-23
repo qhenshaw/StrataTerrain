@@ -44,6 +44,8 @@ namespace Strata
         // below about 5, a patch can still be morphing where it meets a finer neighbour, which opens cracks
         [Tooltip("How far the finest LOD reaches, in leaf patch widths. Each coarser level reaches twice as far.")]
         [SerializeField, Range(5f, 16f)] private float _lodDistanceRatio = 6f;
+        [Tooltip("Rendering layers the terrain surface draws on (for light layers and screen-space effects that mask by them).")]
+        [SerializeField] private RenderingLayerMask _terrainRenderingLayers = RenderingLayerMask.defaultRenderingLayerMask;
 
         [Header("Trees")]
         [Tooltip("Multiplies every tree prototype's LOD and impostor distances.")]
@@ -72,6 +74,8 @@ namespace Strata
                  "128-cell blocks. Shapes need to be about four cells across to stay round.")]
         [SerializeField, Min(0.25f)] private float _caveVoxelSize = 1f;
         [SerializeField] private bool _caveShadows = true;
+        [Tooltip("Rendering layers the cave meshes draw on.")]
+        [SerializeField] private RenderingLayerMask _caveRenderingLayers = RenderingLayerMask.defaultRenderingLayerMask;
         [Tooltip("Caves that reach the surface show full detail within this distance, then coarser (half detail out to 2.5 " +
                  "times it, then quarter), in metres.")]
         [SerializeField, Min(8f)] private float _caveLodDistance = 64f;
@@ -101,6 +105,8 @@ namespace Strata
         public float FlowForFullMoisture => _flowForFullMoisture;
         public float WaterReach => _waterReach;
         public float LodDistanceRatio => _lodDistanceRatio;
+        public uint TerrainRenderingLayers => _terrainRenderingLayers;
+        public uint CaveRenderingLayers => _caveRenderingLayers;
         public float TreeDistanceScale => _treeDistanceScale;
         public int TreeSeed => _treeSeed;
         public bool Streaming => _streaming;

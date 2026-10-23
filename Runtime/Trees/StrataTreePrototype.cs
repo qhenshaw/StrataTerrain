@@ -52,6 +52,10 @@ namespace Strata
         [Tooltip("How far the card standing in for those mesh LODs' shadow moves towards the light, as a fraction of the tree's radius. Through the centre (0) it leaves the mesh's sunward half unshaded, so mid-range trees look too bright.")]
         [SerializeField, Range(0f, 1f)] private float _impostorShadowPush = 0.25f;
 
+        [Header("Rendering")]
+        [Tooltip("Rendering layers its trees draw on (for light layers and screen-space effects that mask by them).")]
+        [SerializeField] private RenderingLayerMask _renderingLayers = RenderingLayerMask.defaultRenderingLayerMask;
+
         [Header("Collision")]
         [SerializeField] private bool _collider = true;
         [SerializeField] private StrataColliderKind _colliderKind = StrataColliderKind.Capsule;
@@ -74,6 +78,7 @@ namespace Strata
         public Vector4 ImpostorBounds => _impostorBounds;
         public float ImpostorBrightness => _impostorBrightness;
         public bool CastShadows => _castShadows;
+        public uint RenderingLayers => _renderingLayers;
         public bool ImpostorShadows => _impostorShadows;
         public int ImpostorShadowLods => _impostorShadowLods;
         public float ImpostorShadowPush => _impostorShadowPush;

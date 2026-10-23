@@ -70,6 +70,7 @@ namespace Strata
         private Material _material;
         private bool _castShadows;
         private int _layer;
+        private uint _renderingLayers = 1;
 
         public StrataGrid Grid => _grid;
         public float VoxelSize { get; private set; }
@@ -81,6 +82,24 @@ namespace Strata
         // underground are drawn, in metres
         public float LodDistance { get; set; } = 64f;
         public float UndergroundDistance { get; set; } = 200f;
+
+        // The rendering layers the brick renderers draw on; changing it restyles every brick.
+        public uint RenderingLayers
+        {
+            get => _renderingLayers;
+            set
+            {
+                if (value == _renderingLayers) return;
+                _renderingLayers = value;
+                for (int tile = 0; tile < _tiles.Length; tile++)
+                {
+                    foreach (Brick brick in _tiles[tile]) Style(brick);
+                    foreach (Brick brick in _far[tile]) Style(brick);
+                }
+                foreach (Brick brick in _pool)
+                    if (brick.Renderer != null) Style(brick);
+            }
+        }
 
         // A tile's bricks changed (loaded, released or previewed).
         public event Action<int> TileChanged;
@@ -317,6 +336,7 @@ namespace Strata
         {
             brick.Renderer.gameObject.layer = _layer;
             brick.Renderer.sharedMaterial = _material;
+            brick.Renderer.renderingLayerMask = _renderingLayers;
             brick.Renderer.shadowCastingMode = _castShadows ? ShadowCastingMode.TwoSided : ShadowCastingMode.Off;
             brick.Renderer.receiveShadows = true;
             brick.Renderer.lightProbeUsage = LightProbeUsage.BlendProbes;

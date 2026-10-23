@@ -160,6 +160,7 @@ namespace Strata
                         {
                             camera = camera,
                             layer = Layer,
+                            renderingLayerMask = prototype.RenderingLayers,
                             worldBounds = batch.Bounds,
                             shadowCastingMode = CastShadows && prototype.CastShadows ? ShadowCastingMode.On : ShadowCastingMode.Off,
                             receiveShadows = true,
