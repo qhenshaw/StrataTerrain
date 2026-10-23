@@ -61,6 +61,7 @@ namespace Strata
         private readonly HashSet<Transform> _foci = new();
         private StrataWorld _world;
         private StrataCollision _subscribed;
+        private StrataCaveColliders _subscribedCaves;
         private Volume _building;
         private int _buildingAgent;
         private bool _dirtiedDuringBuild;
@@ -84,7 +85,7 @@ namespace Strata
         {
             if (!Application.isPlaying) return;
             StrataCollision collision = _world.Collision;
-            if (collision != _subscribed) Subscribe(collision);
+            if (collision != _subscribed || _world.CaveColliders != _subscribedCaves) Subscribe(collision);
             if (collision == null) return;
 
             SyncVolumes();
@@ -207,15 +208,18 @@ namespace Strata
             volume.Sources.Clear();
             Transform terrain = _world.Collision.Root;
             Transform trees = _world.TreeColliders?.Root;
+            Transform caves = _world.CaveColliders?.Root;
             AddStrata(volume, terrain, bounds);
             AddStrata(volume, trees, bounds);
+            AddStrata(volume, caves, bounds);
             if (_extraLayers.value == 0) return;
             _scratch.Clear();
             NavMeshBuilder.CollectSources(bounds, _extraLayers, NavMeshCollectGeometry.PhysicsColliders, 0, s_noMarkups, _scratch);
             foreach (NavMeshBuildSource source in _scratch)
             {
                 if (source.component is not Collider collider) continue;
-                if (collider.isTrigger || (terrain != null && collider.transform.IsChildOf(terrain)) || (trees != null && collider.transform.IsChildOf(trees))) continue;
+                if (collider.isTrigger || (terrain != null && collider.transform.IsChildOf(terrain)) || (trees != null && collider.transform.IsChildOf(trees)) ||
+                    (caves != null && collider.transform.IsChildOf(caves))) continue;
                 if (collider.attachedRigidbody != null && !collider.attachedRigidbody.isKinematic) continue;
                 if (collider.GetComponentInParent<NavMeshAgent>() != null || collider.GetComponentInParent<StrataFocus>() != null) continue;
                 volume.Sources.Add(source);
@@ -290,11 +294,16 @@ namespace Strata
                 _subscribed.ChunkActivated -= OnChunkChanged;
                 _subscribed.ChunkDeactivated -= OnChunkChanged;
             }
+            if (_subscribedCaves != null) _subscribedCaves.Changed -= OnCavesChanged;
             _subscribed = collision;
+            _subscribedCaves = collision != null ? _world.CaveColliders : null;
+            if (_subscribedCaves != null) _subscribedCaves.Changed += OnCavesChanged;
             if (collision == null) return;
             collision.ChunkActivated += OnChunkChanged;
             collision.ChunkDeactivated += OnChunkChanged;
         }
+
+        private void OnCavesChanged(Bounds bounds) => OnChunkChanged(default, bounds);
 
         // the agent list changed while playing: start that volume's data over
         private void Resize(Volume volume)

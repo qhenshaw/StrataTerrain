@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.10.0
+Caves, tunnels and rock.
+- **Cave Tunnel** (needs a SplineContainer: radius, height over width, flat floor, with radius and floor per point)
+  and **Cave Chamber** (an ellipsoid the size of its scale, with a flat floor) features, under GameObject > Strata.
+  Carve hollows the ground out; Add makes rock, for arches and overhangs. Each has a fillet Smoothness, noise, wall
+  and floor palette layers and a floor slope, and a paint and tree effect for the ground around it (by default the
+  tree effect clears trees and grass).
+- They act on a signed distance field that starts as the heightfield's ground, in hierarchy order. The bake (and the
+  live preview, for the tiles an edit touches) meshes it near the features with Burst surface nets in bricks of 32
+  cells on a world lattice (Settings > Caves > Cave Voxel Size, default 1 m), so tiles meet exactly and a bake is
+  repeatable. Ground near a feature is kept just under the terrain, so entrances have no seam.
+- Where a carve opens the ground the terrain gets a hole: a byte of presence per height sample (`StrataHoles`, owned
+  by the heightfield and part of `StrataHeights`). The surface shader's `_STRATA_HOLES` variant, drawn only for CDLOD
+  nodes over a hole, clips it in every pass; terrain collision leaves those triangles out; trees and grass aren't
+  placed there.
+- Tiles with holes or caves are written as version 6, with the holes and the encoded cave meshes (`StrataCaveData`)
+  after the grass; other tiles stay version 5, so a world without caves bakes byte for byte as before. Baked Data
+  records the voxel size and how many tiles have holes (a streamed world's hole slots).
+- `StrataCaves` turns each loaded tile's cave data into hidden MeshRenderers drawn with the world's **Cave Material**
+  (`Strata/CaveSurface`, `Shaders/StrataCave.mat`; assign it for builds), textured from the palette like the terrain
+  (`StrataSurfaceWith`, split out of `StrataSurface`) and sampling probes; `StrataCaveColliders` gives the bricks in
+  each active collision chunk MeshColliders, which `StrataNavMesh` builds from.
+- `StrataGround.TryGetHeight`, `TryGetNormal` and `TryGetLayer` fail over a hole; `TryGetGround` raycasts against
+  the world's collision first in play mode; `IsHole` and `IsUnderground` are new.
+- The probe baker leaves the terrain proxy open over holes and adds the caves as proxies.
+- Evaluating features skips the world's own hidden objects.
+
 ## 0.9.0
 A world is configured entirely in the scene: the settings assets become blocks on the components.
 - The world settings, palette and baked data are blocks on the `StrataWorld` (Settings, Palette, Baked Data) instead

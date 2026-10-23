@@ -33,17 +33,25 @@ Non-destructive tiled terrain for Unity 6 URP (PC, DX12/Vulkan).
   entries); tree effects on every forest
   clear grass too. Density maps (up to 8 prototypes) are baked; the clumps themselves are generated on the GPU around
   each camera every frame and drawn with indirect draws. Assign `StrataGrass.compute` on the world for builds.
-- Edits preview live in the editor; **Bake** writes one compact `.bytes` file per tile (heights, splats, trees and
-  grass densities) and a far file to `StreamingAssets/Strata/<world>/`, and records them in the world's Baked Data
+- Caves: **Cave Tunnel** (a tube along a spline, with a flat floor and radius per point) and **Cave Chamber** (a
+  noisy ellipsoid) features carve tunnels and caverns, or with Add make rock (arches, overhangs), in a signed distance
+  field that starts as the ground and fillets into it. They are meshed on the CPU (Burst surface nets, at the world's
+  Cave Voxel Size) into bricks stored with the tiles, drawn as plain MeshRenderers with the `Strata/CaveSurface`
+  material (palette layers for walls and floors, blending into the ground's layers near the surface), and cut holes
+  in the terrain where they open it: the surface shader clips them, and collision, trees and grass skip them. A
+  cave's paint and tree effect act on the ground around its entrances (by default clearing trees and grass).
+- Edits preview live in the editor; **Bake** writes one compact `.bytes` file per tile (heights, splats, trees,
+  grass densities, and any cave holes and meshes) and a far file to `StreamingAssets/Strata/<world>/`, and records them in the world's Baked Data
   (save the scene afterwards).
 - Streaming (play mode): tiles near cameras and focus transforms are loaded asynchronously into a fixed number of
   slots; everything else is drawn from the resident far copy (heights every 8 m, splats every 8 m at the default
   spacing). Trees are all resident (16 bytes each on the GPU); grass and collision exist only on resident tiles.
-- `StrataGround` answers height, normal and terrain-layer queries for gameplay code.
+- `StrataGround` answers height, normal and terrain-layer queries for gameplay code; they fail over cave holes, and
+  `IsHole` and `IsUnderground` tell when a position is over one or in a cave.
 - The surface, trees and grass are drawn through `BatchRendererGroup`: GPU-displaced CDLOD patches, and trees with
   per-tree LOD crossfade and impostors at 16 bytes of GPU memory a tree.
-- Terrain mesh collision and tree trunk capsules are streamed in chunks around focus transforms (`RegisterFocus`, or
-  a `StrataFocus` component).
+- Terrain mesh collision, tree trunk capsules and cave colliders are streamed in chunks around focus transforms
+  (`RegisterFocus`, or a `StrataFocus` component).
 - A `StrataNavMesh` next to the world streams NavMesh around the same foci in play mode, from that collision plus
   colliders on its Extra Layers, with one NavMesh per listed agent type. It uses the engine's `NavMeshBuilder`, so the
   AI Navigation package isn't needed.

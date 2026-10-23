@@ -2,6 +2,7 @@ using System;
 using System.IO;
 using Unity.Collections;
 using Unity.Collections.LowLevel.Unsafe;
+using UnityEngine;
 
 namespace Strata
 {
@@ -10,8 +11,12 @@ namespace Strata
     // the four strongest layer indices and their weights per texel, then (flag StrataMap) a two-byte map at splat
     // resolution: rock strata strength and which of the world's strata definitions applies, then (flag Trees) the
     // tile's tree count and its StrataTreeRecords, then (flag Grass) the number of grass prototypes and a byte density
-    // map at splat resolution for each. Version 1 files have heights only, version 2 no strata map, version 3 no trees,
-    // version 4 no grass.
+    // map at splat resolution for each. Version 6 files may follow that with optional sections, each a byte length and
+    // its bytes, in flag order: (flag Holes) a sample rectangle of the tile and the terrain's presence there (a byte per
+    // sample, below 128 a hole cut by a cave; samples outside the rectangle are solid), then (flag Caves) the tile's
+    // cave meshes as StrataCaveData encodes them. A tile with neither is still written as version 5, so worlds without
+    // caves bake exactly as before. Version 1 files have heights only, version 2 no strata map, version 3 no trees,
+    // version 4 no grass, version 5 no holes or caves.
     public static class StrataTileFile
     {
         public const int HeaderSize = 16;
@@ -19,8 +24,11 @@ namespace Strata
         public const int StrataMap = 2;
         public const int Trees = 4;
         public const int Grass = 8;
+        public const int Holes = 16;
+        public const int Caves = 32;
         private const int Magic = 0x54525453; // "STRT"
-        private const int Version = 5;
+        private const int Version = 6;
+        private const int PlainVersion = 5;
 
         public static long Size(StrataGrid grid, long trees = 0, int grassTypes = 0) =>
             HeaderSize + grid.SamplesPerTile * 2L + 4 + grid.SplatSamplesPerTile * (10L + grassTypes) + 8 + trees * 10L;
@@ -29,14 +37,15 @@ namespace Strata
         // changed). Returns whether it wrote.
         public static bool Write(string path, int samples, NativeSlice<ushort> heights, int splatSamples, NativeSlice<uint> indices,
                                  NativeSlice<uint> weights, NativeSlice<ushort> strata, NativeArray<StrataTreeRecord> trees,
-                                 int grassTypes, NativeArray<byte> grass)
+                                 int grassTypes, NativeArray<byte> grass, StrataTileExtras extras = null)
         {
+            bool holes = extras?.Holes != null, caves = extras?.Caves != null;
             using MemoryStream stream = new();
             using BinaryWriter writer = new(stream);
             writer.Write(Magic);
-            writer.Write(Version);
+            writer.Write(holes || caves ? Version : PlainVersion);
             writer.Write(samples);
-            writer.Write(Splats | StrataMap | Trees | Grass);
+            writer.Write(Splats | StrataMap | Trees | Grass | (holes ? Holes : 0) | (caves ? Caves : 0));
             byte[] bytes = new byte[heights.Length * 2];
             for (int i = 0; i < heights.Length; i++)
             {
@@ -59,6 +68,21 @@ namespace Strata
             if (treeCount > 0) writer.Write(trees.Reinterpret<byte>(UnsafeUtility.SizeOf<StrataTreeRecord>()).ToArray());
             writer.Write(grassTypes);
             if (grassTypes > 0) writer.Write(grass.ToArray());
+            if (holes)
+            {
+                RectInt rect = extras.HoleRect;
+                writer.Write(16 + extras.Holes.Length);
+                writer.Write(rect.x);
+                writer.Write(rect.y);
+                writer.Write(rect.width);
+                writer.Write(rect.height);
+                writer.Write(extras.Holes);
+            }
+            if (caves)
+            {
+                writer.Write(extras.Caves.Length);
+                writer.Write(extras.Caves);
+            }
             writer.Flush();
 
             byte[] content = stream.ToArray();
@@ -174,6 +198,56 @@ namespace Strata
             return grass;
         }
 
+        // Fills a tile's terrain presence (samples² bytes, 255 solid) from its holes section; false (all solid) if none.
+        public static unsafe bool ReadHoles(NativeArray<byte> file, int samples, int splatSamples, NativeSlice<byte> presence)
+        {
+            for (int i = 0; i < presence.Length; i++) presence[i] = 255;
+            long offset = SectionOffset(file, samples, splatSamples, Holes, out int length);
+            if (offset < 0) return false;
+            int* rect = (int*)((byte*)file.GetUnsafeReadOnlyPtr() + offset);
+            int x0 = rect[0], z0 = rect[1], width = rect[2], height = rect[3];
+            if (x0 < 0 || z0 < 0 || width < 0 || height < 0 || x0 + width > samples || z0 + height > samples || length != 16 + width * height)
+                throw new InvalidDataException("Strata tile file holes are malformed.");
+            byte* source = (byte*)rect + 16;
+            for (int z = 0; z < height; z++)
+            for (int x = 0; x < width; x++)
+                presence[(z0 + z) * samples + x0 + x] = source[z * width + x];
+            return true;
+        }
+
+        // A tile file's encoded cave meshes (StrataCaveData), in a new array the caller disposes; empty if it has none.
+        public static unsafe NativeArray<byte> ReadCaves(NativeArray<byte> file, int samples, int splatSamples, Allocator allocator)
+        {
+            long offset = SectionOffset(file, samples, splatSamples, Caves, out int length);
+            if (offset < 0) return new NativeArray<byte>(0, allocator);
+            NativeArray<byte> caves = new(length, allocator, NativeArrayOptions.UninitializedMemory);
+            UnsafeUtility.MemCpy(caves.GetUnsafePtr(), (byte*)file.GetUnsafeReadOnlyPtr() + offset, length);
+            return caves;
+        }
+
+        // Where an optional section's bytes start (after its length), or -1 if the file doesn't have it.
+        private static unsafe long SectionOffset(NativeArray<byte> file, int samples, int splatSamples, int flag, out int length)
+        {
+            length = 0;
+            int* header = Header(file, samples);
+            if (header[1] < 6 || (header[3] & flag) == 0) return -1;
+            byte* bytes = (byte*)header;
+            int count = splatSamples * splatSamples;
+            long offset = HeaderSize + samples * samples * 2L + 4 + count * 10L;
+            offset += 4 + (long)*(int*)(bytes + offset) * UnsafeUtility.SizeOf<StrataTreeRecord>();
+            offset += 4 + (long)*(int*)(bytes + offset) * count;
+            for (int section = Holes; section <= Caves; section <<= 1)
+            {
+                if ((header[3] & section) == 0) continue;
+                if (file.Length < offset + 4) throw new InvalidDataException("Strata tile file sections are truncated.");
+                length = *(int*)(bytes + offset);
+                if (length < 0 || file.Length < offset + 4 + length) throw new InvalidDataException("Strata tile file sections are truncated.");
+                if (section == flag) return offset + 4;
+                offset += 4 + length;
+            }
+            return -1;
+        }
+
         private static unsafe int* Header(NativeArray<byte> file, int samples)
         {
             if (file.Length < HeaderSize) throw new InvalidDataException("Strata tile file is too short.");
@@ -183,5 +257,15 @@ namespace Strata
             if (header[2] != samples) throw new InvalidDataException($"Strata tile file has {header[2]} samples per edge, expected {samples}.");
             return header;
         }
+    }
+
+    // The optional sections of a tile: its holes (presence bytes over a sample rectangle) and encoded cave meshes.
+    public sealed class StrataTileExtras
+    {
+        public RectInt HoleRect;
+        public byte[] Holes;
+        public byte[] Caves;
+
+        public bool IsEmpty => Holes == null && Caves == null;
     }
 }

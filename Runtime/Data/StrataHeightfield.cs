@@ -13,7 +13,8 @@ namespace Strata
     // preview to write into), a tile-to-slot map on both (-1 where a tile isn't resident), a coarse far copy of the
     // whole world on both (StrataHeights.FarStep), and the min/max height of every CDLOD node (for culling). A resident
     // heightfield has a slot per tile, slot i holding tile i; a streamed one has fewer and the streamer fills them as
-    // tiles come near, its node bounds and far copy coming from the bake's far file.
+    // tiles come near, its node bounds and far copy coming from the bake's far file. It also owns the world's cave
+    // holes (StrataHoles), changed through it so jobs reading the heights finish first.
     public sealed class StrataHeightfield : IDisposable
     {
         private NativeArray<int> _tileSlots;
@@ -29,16 +30,22 @@ namespace Strata
         public RenderTexture Texture { get; private set; }
         public Texture2D FarTexture { get; private set; }
         public GraphicsBuffer TileSlotBuffer { get; private set; }
+        public StrataHoles Holes { get; private set; }
         public NativeArray<int> TileSlots => _tileSlots;
         public NativeArray<ushort> Far => _far;
-        public StrataHeights View => new() { Grid = Grid, Slots = Heights, TileSlots = _tileSlots, Far = _far };
+        public StrataHeights View => new()
+        {
+            Grid = Grid, Slots = Heights, TileSlots = _tileSlots, Far = _far, Holes = Holes.Presence, HoleSlots = Holes.TileSlots
+        };
 
         // Jobs that read Heights or NodeMinMax (culling, collision); writers complete these first.
         public JobHandle Readers { get; set; }
 
-        // A slot for every tile (slotCount 0), or a streamed heightfield with that many slots, all empty.
-        public StrataHeightfield(StrataGrid grid, int slotCount = 0)
+        // A slot for every tile (slotCount 0), or a streamed heightfield with that many slots, all empty, and as many hole
+        // slots (0 for one per tile).
+        public StrataHeightfield(StrataGrid grid, int slotCount = 0, int holeSlots = 0)
         {
+            Holes = new StrataHoles(grid, holeSlots);
             Grid = grid;
             Streamed = slotCount > 0 && slotCount < grid.TileCount;
             SlotCount = Streamed ? slotCount : grid.TileCount;
@@ -74,6 +81,25 @@ namespace Strata
             Fill(math.clamp(0f, grid.MinHeight, grid.MaxHeight));
         }
 
+        // Puts a tile's cave holes in place: presence bytes (SamplesPerTile, or ignored when it has none), or from its file.
+        public void SetHoles(int tile, NativeSlice<byte> presence, bool any)
+        {
+            Readers.Complete();
+            Holes.SetTile(tile, presence, any);
+        }
+
+        public void SetHoles(int tile, NativeArray<byte> file, int splatSamples)
+        {
+            Readers.Complete();
+            Holes.SetTile(tile, file, splatSamples);
+        }
+
+        public void ReleaseHoles(int tile)
+        {
+            Readers.Complete();
+            Holes.ReleaseTile(tile);
+        }
+
         public int SlotOf(int tile) => _tileSlots[tile];
         public int TileOf(int slot) => _slotTiles[slot];
         public bool IsResident(int tile) => _tileSlots[tile] >= 0;
@@ -101,6 +127,7 @@ namespace Strata
             {
                 NativeArray<byte> file = data.ReadTile(tile, Allocator.Temp);
                 StrataTileFile.Read(file, Grid.Samples, Heights.Slice(tile * Grid.SamplesPerTile, Grid.SamplesPerTile));
+                Holes.SetTile(tile, file, Grid.SplatSamples);
                 file.Dispose();
             }
             UpdateBounds();
@@ -208,6 +235,8 @@ namespace Strata
             if (NodeMinMax.IsCreated) NodeMinMax.Dispose();
             if (_tileSlots.IsCreated) _tileSlots.Dispose();
             if (_far.IsCreated) _far.Dispose();
+            Holes?.Dispose();
+            Holes = null;
             TileSlotBuffer?.Dispose();
             TileSlotBuffer = null;
             if (Texture != null) UnityEngine.Object.DestroyImmediate(Texture);

@@ -13,7 +13,8 @@ namespace Strata.Editor
     // Bakes Adaptive Probe Volumes for a world. The probe baker only sees GI-static renderers, and Strata draws its
     // terrain and trees procedurally, so for the length of the bake it stands in proxies: the terrain at ProxySpacing
     // with one world albedo texture (each texel the splat-weighted mean colour of its layers), and every tree as a
-    // cone crown on a trunk prism coloured like its prototype's foliage and bark, both merged per tile. The proxies are
+    // cone crown on a trunk prism coloured like its prototype's foliage and bark, both merged per tile, with the terrain
+    // left open over cave holes and the caves' own meshes standing in for the rock around them. The proxies are
     // never saved and are destroyed when the bake ends. The first bake also sets the scene up: a probe volume over the
     // world (or a local one over a region, to measure before a full bake), the scene's baking set at the world's probe spacing, and lighting
     // settings of its own with baked GI on (the shared ones are left alone). Strata's shaders sample the probes
@@ -65,6 +66,7 @@ namespace Strata.Editor
                 Texture2D albedo = TerrainAlbedo(world);
                 Material ground = ProxyMaterial("Strata Probe Ground", Color.white, albedo);
                 Material[] treeMaterials = TreeMaterials(world.Trees.Prototypes);
+                Material cave = ProxyMaterial("Strata Probe Cave", CaveColour(world));
                 for (int tile = 0; tile < grid.TileCount; tile++)
                 {
                     float2 min = grid.TileOrigin(tile % grid.TilesX, tile / grid.TilesX);
@@ -72,6 +74,8 @@ namespace Strata.Editor
                     tiles++;
                     Mesh terrain = TerrainMesh(world, tile);
                     triangles += AddProxy($"Terrain {tile}", terrain, ground);
+                    Mesh caves = CaveMesh(world, tile);
+                    if (caves != null) triangles += AddProxy($"Caves {tile}", caves, cave);
                     Mesh forest = ForestMesh(world, tile, out int count);
                     trees += count;
                     if (forest != null) triangles += AddProxy($"Trees {tile}", forest, treeMaterials);
@@ -347,14 +351,17 @@ namespace Strata.Editor
                 vertices[z * across + x] = new Vector3(position.x, heights.At(sample), position.y);
                 uvs[z * across + x] = (position - grid.Origin) / grid.Size;
             }
-            int[] triangles = new int[quads * quads * 6];
-            int n = 0;
+            List<int> triangles = new(quads * quads * 6);
             for (int z = 0; z < quads; z++)
             for (int x = 0; x < quads; x++)
             {
+                // open where any corner is in a cave's hole, so probes in the cave see the sky through it
+                int2 sample = first + new int2(x, z) * step;
+                if (heights.Presence(sample) < 0.5f || heights.Presence(sample + new int2(step, 0)) < 0.5f ||
+                    heights.Presence(sample + new int2(0, step)) < 0.5f || heights.Presence(sample + step) < 0.5f) continue;
                 int i = z * across + x;
-                triangles[n++] = i; triangles[n++] = i + across; triangles[n++] = i + 1;
-                triangles[n++] = i + 1; triangles[n++] = i + across; triangles[n++] = i + across + 1;
+                triangles.Add(i); triangles.Add(i + across); triangles.Add(i + 1);
+                triangles.Add(i + 1); triangles.Add(i + across); triangles.Add(i + across + 1);
             }
             Mesh mesh = new() { name = $"Strata Probe Terrain {tile}", hideFlags = HideFlags.DontSave };
             mesh.SetVertices(vertices);
@@ -363,6 +370,33 @@ namespace Strata.Editor
             mesh.RecalculateNormals();
             mesh.RecalculateBounds();
             return mesh;
+        }
+
+        // One tile's cave meshes merged in world space, or null if it has none.
+        private static Mesh CaveMesh(StrataWorld world, int tile)
+        {
+            if (world.Caves == null || world.Caves[tile].Count == 0) return null;
+            List<CombineInstance> parts = new();
+            foreach (StrataCaves.Brick brick in world.Caves[tile])
+                parts.Add(new CombineInstance { mesh = brick.Mesh, transform = Matrix4x4.Translate(brick.Origin) });
+            Mesh mesh = new() { name = $"Strata Probe Caves {tile}", hideFlags = HideFlags.DontSave, indexFormat = IndexFormat.UInt32 };
+            mesh.CombineMeshes(parts.ToArray(), true, true);
+            mesh.RecalculateBounds();
+            return mesh;
+        }
+
+        // The mean colour of the wall layers the caves use (grey if none is set).
+        private static Color CaveColour(StrataWorld world)
+        {
+            Color sum = Color.clear;
+            int count = 0;
+            foreach (StrataCaveFeature cave in world.GetComponentsInChildren<StrataCaveFeature>())
+            {
+                if (cave.WallLayer == null) continue;
+                sum += StrataTreeBuilder.MeanColour(cave.WallLayer.Albedo) * cave.WallLayer.Tint.linear;
+                count++;
+            }
+            return count > 0 ? (sum / count).gamma : Color.gray;
         }
 
         // One tile's trees as cones on prisms, a crown and a trunk submesh per prototype; null if the tile has none.

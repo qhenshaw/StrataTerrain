@@ -363,7 +363,7 @@ void RockWrite(uint3 id : SV_DispatchThreadID)
 
 // PaintFeature: one feature's influence, painted with its layer. _PaintKind: 0 texture stamp, 1 noise stamp, 2 spline,
 // 3 filter footprint, 4 filter deposition, 5 filter erosion, 6 rock strata ledges (locally flat on broadly steep ground),
-// 7 tree scatter (its forest's density).
+// 7 tree scatter (its forest's density), 8 cave (its weight on the ground, from _Delta).
 int _PaintKind;
 float4 _Paint;          // layer, strength, width scale, sensitivity
 Texture2D<float4> _StampTexture;
@@ -458,6 +458,7 @@ float ForestDensity(float2 p, int2 texel)
 float FeatureInfluence(float2 p, int2 texel)
 {
     if (_PaintKind == 2) return SplineInfluence(p);
+    if (_PaintKind == 8) return saturate(DeltaAt(p));
     if (_PaintKind == 6) return StrataFootprint(p) * StrataSteepness(p) * (1.0 - smoothstep(15.0, 30.0, SlopeAt(p, _Grid.z)));
     float2 uv = FootprintUV(p);
     float influence = _Unbounded > 0.5 ? 1.0 : FootprintWeight(uv);

@@ -48,6 +48,11 @@ namespace Strata.Editor
                 EditorGUILayout.LabelField("Last Tree Cull", $"{world.TreeRenderer.LastCullMilliseconds:0.000} ms, {world.TreeRenderer.LastVisibleTrees} drawn");
                 EditorGUILayout.LabelField("Last Tree Placement", $"{StrataPreview.Trees.LastPlaceMilliseconds:0.0} ms");
             }
+            if (world.Caves != null && (world.Caves.BrickCount > 0 || world.Heightfield.Holes.HoledCount > 0))
+            {
+                EditorGUILayout.LabelField("Caves", $"{world.Caves.BrickCount} bricks, {world.Caves.TriangleCount} triangles, {world.Heightfield.Holes.HoledCount} holed tiles");
+                EditorGUILayout.LabelField("Last Cave Preview", $"{StrataPreview.LastCaveMilliseconds:0.0} ms ({StrataPreview.Caves.LastMilliseconds:0.0} ms meshing)");
+            }
             if (world.Grass != null)
                 EditorGUILayout.LabelField("Grass", $"{world.GrassPrototypes.Count} prototypes, {world.Grass.Texture.volumeDepth * (long)world.Grass.Texture.width * world.Grass.Texture.height / (1024f * 1024f):0.0} MB density maps");
 

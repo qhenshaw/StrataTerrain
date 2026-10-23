@@ -4,8 +4,8 @@ using UnityEngine.Splines;
 
 namespace Strata.Editor
 {
-    // GameObject > Strata menu items: a world, and each kind of feature, created under the selected world (or the
-    // selected feature's world) at the scene view's focus point.
+    // GameObject > Strata menu items: a world, and each kind of feature (caves included), created under the selected
+    // world (or the selected feature's world) at the scene view's focus point.
     public static class StrataMenu
     {
         [MenuItem("GameObject/Strata/World", false, 10)]
@@ -41,6 +41,22 @@ namespace Strata.Editor
 
         [MenuItem("GameObject/Strata/Stamp Group", false, 25)]
         private static void CreateGroup(MenuCommand command) => CreateFeature<StampGroup>("Stamp Group", command);
+
+        // a tunnel that dips under the ground from the scene view's focus point and comes back up
+        [MenuItem("GameObject/Strata/Cave Tunnel", false, 29)]
+        private static void CreateCaveTunnel(MenuCommand command)
+        {
+            GameObject go = CreateFeature<CaveTunnel>("Cave Tunnel", command);
+            Spline spline = go.GetComponent<SplineContainer>().Spline;
+            spline.Clear();
+            spline.Add(new BezierKnot(new Vector3(-40f, 1f, 0f)), TangentMode.AutoSmooth);
+            spline.Add(new BezierKnot(new Vector3(0f, -12f, 0f)), TangentMode.AutoSmooth);
+            spline.Add(new BezierKnot(new Vector3(40f, 1f, 0f)), TangentMode.AutoSmooth);
+        }
+
+        [MenuItem("GameObject/Strata/Cave Chamber", false, 30)]
+        private static void CreateCaveChamber(MenuCommand command) =>
+            CreateFeature<CaveChamber>("Cave Chamber", command).transform.localScale = new Vector3(40f, 20f, 30f);
 
         // last, so it sees the finished heights and splats and features above it can't change it
         [MenuItem("GameObject/Strata/Tree Scatter", false, 27)]

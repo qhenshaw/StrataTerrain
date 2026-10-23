@@ -11,7 +11,7 @@ namespace Strata
     // Keeps the tiles near the streaming centres (cameras and collision foci) resident in a streamed world. Each update
     // it ranks tiles by their distance from the nearest centre: tiles beyond the radius plus a margin give up their slot,
     // and tiles within the radius that aren't resident are read from their files with AsyncReadManager, nearest first, a
-    // few at a time. A finished read puts the tile's heights, splats, strata and grass in a free slot (taking the
+    // few at a time. A finished read puts the tile's heights, holes, splats, strata, grass and caves in a free slot (taking the
     // farthest resident tile's if none is free) and re-seats its trees on the full heights, a couple of tiles per update
     // so loading doesn't hitch. Tiles within the immediate radius (collision) are read straight away when first wanted.
     public sealed unsafe class StrataStreamer : IDisposable
@@ -29,6 +29,7 @@ namespace Strata
         private readonly StrataSplatmap _splats;
         private readonly StrataGrassMap _grass;
         private readonly StrataTrees _trees;
+        private readonly StrataCaves _caves;
         private readonly float _radius;
         private readonly float _immediateRadius;
         private readonly int _maxLoads;
@@ -46,8 +47,9 @@ namespace Strata
         public event Action<int> TileLoaded;
 
         public StrataStreamer(StrataWorldData data, StrataHeightfield heights, StrataSplatmap splats, StrataGrassMap grass, StrataTrees trees,
-                              float radius, float immediateRadius, int maxLoads)
+                              StrataCaves caves, float radius, float immediateRadius, int maxLoads)
         {
+            _caves = caves;
             _data = data;
             _heights = heights;
             _splats = splats;
@@ -150,9 +152,11 @@ namespace Strata
             StrataTileFile.Read(file, grid.Samples, samples.Slice());
             _heights.SetTile(tile, slot, samples.Slice());
             samples.Dispose();
+            _heights.SetHoles(tile, file, grid.SplatSamples);
             _splats.SetTile(tile, slot, file, _data.Strata);
             _grass?.SetTile(slot, file);
             _trees.RebuildTile(tile);
+            _caves?.SetTile(tile, file, grid.SplatSamples);
             LoadedTotal++;
             LastApplyMilliseconds = (System.Diagnostics.Stopwatch.GetTimestamp() - started) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
             TileLoaded?.Invoke(tile);
@@ -177,7 +181,9 @@ namespace Strata
         private void Release(int tile)
         {
             _heights.ReleaseTile(tile);
+            _heights.ReleaseHoles(tile);
             _splats.ReleaseTile(tile);
+            _caves?.ReleaseTile(tile);
         }
 
         private static void Dispose(Load load)

@@ -169,13 +169,13 @@ half3 StrataDebugColour(int index)
     return colours[index % 8] * (index < 8 ? 1.0 : 0.6);
 }
 
-StrataSurfaceOutput StrataSurface(float3 positionWS, float3 geometricNormal, float distance)
+// The surface from the given layers and rock strata, at a position with its geometric normal, seen from a distance;
+// forceTriplanar 1 projects triplanar whatever the slope (cave walls and ceilings).
+StrataSurfaceOutput StrataSurfaceWith(StrataLayers layers, StrataRock rock, float3 positionWS, float3 geometricNormal, float distance,
+                                      float forceTriplanar)
 {
-    StrataLayers layers = StrataSplat(positionWS.xz);
-
     // rock strata: the beds shape the normal; on steep faces each bed gets its own tint and, if asked, textures that
     // run along the bed (v follows the bed, u shifted per bed) instead of plain triplanar
-    StrataRock rock = StrataRockAt(positionWS.xz);
     geometricNormal = StrataBandNormal(geometricNormal, positionWS, distance, rock);
     float sideV = positionWS.y;
     float sideShift = 0.0;
@@ -198,7 +198,7 @@ StrataSurfaceOutput StrataSurface(float3 positionWS, float3 geometricNormal, flo
     }
 
     // projection weights: straight down on gentle ground, triplanar as it steepens
-    float steep = saturate((_TriplanarStart - geometricNormal.y) / max(_TriplanarStart - _TriplanarEnd, 1e-3));
+    float steep = max(saturate((_TriplanarStart - geometricNormal.y) / max(_TriplanarStart - _TriplanarEnd, 1e-3)), forceTriplanar);
     float3 tri = pow(abs(geometricNormal), _TriplanarSharpness);
     tri /= dot(tri, 1.0);
     float3 projection = lerp(float3(0, 1, 0), tri, steep);
@@ -294,6 +294,12 @@ StrataSurfaceOutput StrataSurface(float3 positionWS, float3 geometricNormal, flo
             if (layers.index[k4] >= 0) o.albedo += StrataDebugColour(layers.index[k4]) * blend[k4];
     }
     return o;
+}
+
+// The terrain's surface: its splats' layers and rock strata at the position.
+StrataSurfaceOutput StrataSurface(float3 positionWS, float3 geometricNormal, float distance)
+{
+    return StrataSurfaceWith(StrataSplat(positionWS.xz), StrataRockAt(positionWS.xz), positionWS, geometricNormal, distance, 0.0);
 }
 
 #endif

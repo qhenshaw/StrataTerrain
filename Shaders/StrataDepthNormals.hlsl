@@ -18,6 +18,7 @@ Varyings Vert(Attributes input)
 
 half4 Frag(Varyings input) : SV_Target
 {
+    StrataClipHole(input.positionWS.xz);
     float3 normalWS = StrataBandNormal(StrataNormal(input.positionWS.xz), input.positionWS,
                                        length(_StrataCameraPosition - input.positionWS), StrataRockAt(input.positionWS.xz));
     #if defined(_GBUFFER_NORMALS_OCT)

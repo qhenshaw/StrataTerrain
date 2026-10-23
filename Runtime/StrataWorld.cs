@@ -9,9 +9,9 @@ namespace Strata
     // layers it paints with, and what the last bake produced. It owns the heightfield, trees and grass densities (loaded
     // from the baked data, or flat and bare until the first bake), draws them with a StrataTerrainRenderer, a
     // StrataTreeRenderer and a StrataGrassRenderer (which generates grass on the GPU per camera) in edit and play mode,
-    // and in play mode streams terrain and tree trunk collision around the registered focus transforms and StrataFocus
-    // components. Authoring features (stamps, splines, filters) live under this object in
-    // the hierarchy; the editor evaluates them for the live preview and the bake.
+    // and its baked caves with StrataCaves, and in play mode streams terrain, tree trunk and cave collision around the
+    // registered focus transforms and StrataFocus components. Authoring features (stamps, splines, filters, caves) live
+    // under this object in the hierarchy; the editor evaluates them for the live preview and the bake.
     [ExecuteAlways, DisallowMultipleComponent]
     public class StrataWorld : MonoBehaviour
     {
@@ -27,6 +27,8 @@ namespace Strata
         private static readonly List<StrataWorld> s_active = new();
 
         [SerializeField] private Material _material;
+        [Tooltip("Material for cave walls; its texturing settings follow the terrain material's.")]
+        [SerializeField] private Material _caveMaterial;
         [Tooltip("Strata's StrataGrass.compute; assign it so builds include it.")]
         [SerializeField] private ComputeShader _grassShader;
         [SerializeField] private bool _castShadows = true;
@@ -41,6 +43,7 @@ namespace Strata
         private readonly List<Transform> _focusScratch = new();
         private readonly List<Unity.Mathematics.float3> _centres = new();
         private bool _warnedNoFocus;
+        private Material _caveInstance;
 
         public static IReadOnlyList<StrataWorld> Active => s_active;
         public StrataWorldSettings Settings => _settings;
@@ -55,6 +58,8 @@ namespace Strata
         public StrataTreeRenderer TreeRenderer { get; private set; }
         public StrataTreeColliders TreeColliders { get; private set; }
         public StrataGrassMap Grass { get; private set; }
+        public StrataCaves Caves { get; private set; }
+        public StrataCaveColliders CaveColliders { get; private set; }
         // Streams tiles in play mode (null when every tile is resident).
         public StrataStreamer Streamer { get; private set; }
         public StrataGrassRenderer GrassRenderer { get; private set; }
@@ -110,11 +115,13 @@ namespace Strata
         {
 #if UNITY_EDITOR
             _material = UnityEditor.AssetDatabase.LoadAssetAtPath<Material>(DefaultMaterialPath);
+            _caveMaterial = UnityEditor.AssetDatabase.LoadAssetAtPath<Material>(DefaultCaveMaterialPath);
             _grassShader = UnityEditor.AssetDatabase.LoadAssetAtPath<ComputeShader>(GrassShaderPath);
 #endif
         }
 
         public const string DefaultMaterialPath = "Packages/com.qhenshaw.terrain/Shaders/StrataTerrain.mat";
+        public const string DefaultCaveMaterialPath = "Packages/com.qhenshaw.terrain/Shaders/StrataCave.mat";
         public const string GrassShaderPath = "Packages/com.qhenshaw.terrain/Runtime/Compute/StrataGrass.compute";
 
         private void Build()
@@ -133,7 +140,9 @@ namespace Strata
                 Debug.LogWarning($"{name}: the baked data is missing or doesn't match the world settings ({_settings.Grid}); bake again.", this);
             // play mode streams tiles in around the cameras and foci; the editor keeps every tile resident to edit them
             bool stream = baked && Application.isPlaying && _settings.Streaming && _settings.ResidentTiles < _settings.Grid.TileCount;
-            Heightfield = new StrataHeightfield(_settings.Grid, stream ? _settings.ResidentTiles : 0);
+            // a streamed world needs hole slots only for its holed tiles, at most one per resident tile
+            int holeSlots = stream ? Math.Clamp(_data.HoledTiles, 1, _settings.ResidentTiles) : 0;
+            Heightfield = new StrataHeightfield(_settings.Grid, stream ? _settings.ResidentTiles : 0, holeSlots);
             Splatmap = new StrataSplatmap(_settings.Grid, Heightfield.SlotCount);
             if (stream)
             {
@@ -147,6 +156,7 @@ namespace Strata
                 Splatmap.Load(_data);
             }
             Renderer = new StrataTerrainRenderer(Heightfield, material, _settings.LodDistanceRatio) { CastShadows = _castShadows, Layer = gameObject.layer };
+            BuildCaves(material, baked && !stream);
             if (_material == null) DestroyImmediate(material);
             RebuildPalette();
             SetStrataDefinitions(baked ? _data.Strata : Array.Empty<StrataBandDefinition>());
@@ -164,14 +174,39 @@ namespace Strata
                 if (baked && !stream) Grass.Load(_data);
             }
             if (stream)
-                Streamer = new StrataStreamer(_data, Heightfield, Splatmap, Grass, Trees, _settings.StreamingRadius,
+                Streamer = new StrataStreamer(_data, Heightfield, Splatmap, Grass, Trees, Caves, _settings.StreamingRadius,
                                               _settings.CollisionRadius + _settings.CollisionChunkSize, _settings.MaxConcurrentLoads);
             if (Application.isPlaying)
             {
                 Collision = new StrataCollision(Heightfield, transform, _settings.CollisionChunkSize, _settings.CollisionRadius, _settings.CollisionLayer);
                 TreeColliders = new StrataTreeColliders(Trees, Collision, transform, _settings.CollisionLayer);
+                if (Caves != null) CaveColliders = new StrataCaveColliders(Caves, Collision, transform, _settings.CollisionLayer);
             }
             Rebuilt?.Invoke();
+        }
+
+        // The cave meshes and their material (a copy of the cave material, textured like the terrain), loaded from every
+        // tile when the world is resident; a streamed world's tiles load theirs as they come in.
+        private void BuildCaves(Material terrain, bool load)
+        {
+            Material source = _caveMaterial;
+#if UNITY_EDITOR
+            if (source == null) source = UnityEditor.AssetDatabase.LoadAssetAtPath<Material>(DefaultCaveMaterialPath);
+#endif
+            Shader fallback = source == null ? Shader.Find("Strata/CaveSurface") : null;
+            if (source == null && fallback == null) return;
+            _caveInstance = source != null ? new Material(source) : new Material(fallback);
+            _caveInstance.name = "Strata Caves";
+            _caveInstance.hideFlags = HideFlags.HideAndDontSave;
+            StrataMaterialBinding.CopyLook(terrain, _caveInstance);
+            Caves = new StrataCaves(_settings.Grid, transform, _caveInstance, gameObject.layer, _castShadows && _settings.CaveShadows);
+            if (!load) return;
+            for (int tile = 0; tile < _settings.Grid.TileCount; tile++)
+            {
+                Unity.Collections.NativeArray<byte> file = _data.ReadTile(tile, Unity.Collections.Allocator.Temp);
+                Caves.SetTile(tile, file, _settings.Grid.SplatSamples);
+                file.Dispose();
+            }
         }
 
         // The rock strata definitions the strata map refers to (from the bake, or set live by the editor preview).
@@ -240,8 +275,11 @@ namespace Strata
         {
             Streamer?.Dispose();
             Streamer = null;
+            CaveColliders?.Dispose();
             TreeColliders?.Dispose();
             Collision?.Dispose();
+            Caves?.Dispose();
+            if (_caveInstance != null) DestroyImmediate(_caveInstance);
             TreeRenderer?.Dispose();
             Trees?.Dispose();
             GrassRenderer?.Dispose();
@@ -250,8 +288,11 @@ namespace Strata
             PaletteTextures?.Dispose();
             Splatmap?.Dispose();
             Heightfield?.Dispose();
+            CaveColliders = null;
             TreeColliders = null;
             Collision = null;
+            Caves = null;
+            _caveInstance = null;
             TreeRenderer = null;
             Trees = null;
             GrassRenderer = null;
@@ -302,6 +343,8 @@ namespace Strata
             foreach (StrataWorld world in s_active)
             {
                 world.Renderer?.Rebind();
+                if (world._caveInstance != null && world.Renderer != null)
+                    StrataMaterialBinding.Bind(world._caveInstance, world.Heightfield, world.Splatmap, world.PaletteTextures, world.Renderer.Bands, world.Renderer.Lod);
                 if (world.TreeRenderer == null) continue;
                 world.TreeRenderer.DistanceScale = world._settings.TreeDistanceScale;
                 world.TreeRenderer.Refresh();

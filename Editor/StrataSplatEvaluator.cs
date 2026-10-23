@@ -560,6 +560,15 @@ namespace Strata.Editor
                     SetFootprint(scatter.transform, scatter.EdgeFalloff, scatter.FalloffCurve);
                     SetForest(kernel, scatter.Forest);
                     return true;
+                case StrataCaveFeature cave:
+                {
+                    // the cave's weight on the ground, worked out on the CPU from its shape
+                    if (!StrataPreview.Caves.TryGetInfluence(cave, out Texture influence, out RectInt area)) return false;
+                    _shader.SetInt("_PaintKind", 8);
+                    _shader.SetTexture(kernel, "_Delta", influence);
+                    _shader.SetInts("_DeltaArea", area.x, area.y, area.width, area.height);
+                    return true;
+                }
                 default:
                     return false;
             }

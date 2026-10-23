@@ -2,7 +2,8 @@
 // a CDLOD node; the shared flat patch is placed and displaced from the world's height texture in the vertex shader,
 // and the geometric normal is taken per pixel from the full-resolution heights, so coarse far patches still shade with
 // all their detail. The forward pass textures the surface from the splat maps and the palette's layers
-// (StrataSurface.hlsl) and lights it with URP's PBR lighting.
+// (StrataSurface.hlsl) and lights it with URP's PBR lighting. The _STRATA_HOLES variant, drawn for nodes over a cave
+// hole, clips the hole in every pass.
 Shader "Strata/TerrainSurface"
 {
     Properties
@@ -45,6 +46,7 @@ Shader "Strata/TerrainSurface"
         HLSLINCLUDE
         #pragma target 4.5
         #pragma multi_compile _ DOTS_INSTANCING_ON
+        #pragma multi_compile_local _ _STRATA_HOLES
         #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
         #include "StrataCommon.hlsl"
         ENDHLSL
@@ -96,6 +98,7 @@ Shader "Strata/TerrainSurface"
             {
                 // under BRG this also loads the ambient probe (unity_SHAr etc. read per-instance or global DOTS values)
                 UNITY_SETUP_INSTANCE_ID(input);
+                StrataClipHole(input.positionWS.xz);
                 float3 geometricNormal = StrataNormal(input.positionWS.xz);
                 float distance = length(GetCameraPositionWS() - input.positionWS);
                 StrataSurfaceOutput surface = StrataSurface(input.positionWS, geometricNormal, distance);
@@ -159,6 +162,7 @@ Shader "Strata/TerrainSurface"
             struct Varyings
             {
                 float4 positionCS : SV_POSITION;
+                float3 positionWS : TEXCOORD0;
             };
 
             Varyings Vert(Attributes input)
@@ -166,6 +170,7 @@ Shader "Strata/TerrainSurface"
                 UNITY_SETUP_INSTANCE_ID(input);
                 Varyings output = (Varyings)0;
                 float3 positionWS = StrataPlace(input.positionOS.xyz);
+                output.positionWS = positionWS;
                 float3 normalWS = StrataNormal(positionWS.xz);
                 #if defined(_CASTING_PUNCTUAL_LIGHT_SHADOW)
                     float3 lightDirectionWS = normalize(_LightPosition - positionWS);
@@ -185,6 +190,7 @@ Shader "Strata/TerrainSurface"
 
             half4 Frag(Varyings input) : SV_Target
             {
+                StrataClipHole(input.positionWS.xz);
                 return 0;
             }
             ENDHLSL
@@ -204,18 +210,21 @@ Shader "Strata/TerrainSurface"
             struct Varyings
             {
                 float4 positionCS : SV_POSITION;
+                float3 positionWS : TEXCOORD0;
             };
 
             Varyings Vert(Attributes input)
             {
                 UNITY_SETUP_INSTANCE_ID(input);
                 Varyings output = (Varyings)0;
-                output.positionCS = TransformWorldToHClip(StrataPlace(input.positionOS.xyz));
+                output.positionWS = StrataPlace(input.positionOS.xyz);
+                output.positionCS = TransformWorldToHClip(output.positionWS);
                 return output;
             }
 
             half4 Frag(Varyings input) : SV_Target
             {
+                StrataClipHole(input.positionWS.xz);
                 return input.positionCS.z;
             }
             ENDHLSL

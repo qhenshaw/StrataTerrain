@@ -95,7 +95,8 @@ namespace Strata.Editor
         {
             foreach (Transform child in parent)
             {
-                if (!child.gameObject.activeInHierarchy) continue;
+                // skips the world's own generated objects (cave meshes, collision)
+                if (!child.gameObject.activeInHierarchy || (child.hideFlags & HideFlags.DontSave) != 0) continue;
                 StrataFeature feature = child.GetComponent<StrataFeature>();
                 if (feature == null || !feature.enabled)
                 {
