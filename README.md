@@ -11,7 +11,8 @@ Non-destructive tiled terrain for Unity 6 URP (PC, DX12/Vulkan).
   **Auto Splat** feature paints the layers by their rules (height, slope, curvature, moisture from flow and water,
   noise; the moisture inputs are world settings); any feature can also paint a layer where it acts. Splats keep the four strongest layers per texel at 1, 2
   or 4 m. The surface shader height-blends them with triplanar mapping on steep ground, far-distance tiling, macro
-  variation and optional hex-tiled stochastic sampling, under URP PBR lighting.
+  variation and optional hex-tiled stochastic sampling, under URP PBR lighting (forward, or written into the GBuffer
+  under deferred rendering).
 - Rock strata: the **Rock Strata** feature terraces steep ground into ledges along jittered, dipping rock beds (baked
   into the heights, so collision follows), and marks it for the surface shader, which pushes each bed's face out
   (on extra half-metre detail patches near the camera, where the slope still leaves the mesh room for it), shades
@@ -52,6 +53,8 @@ Non-destructive tiled terrain for Unity 6 URP (PC, DX12/Vulkan).
   spacing). Trees are all resident (16 bytes each on the GPU); grass and collision exist only on resident tiles.
 - `StrataGround` answers height, normal and terrain-layer queries for gameplay code; they fail over cave holes, and
   `IsHole` and `IsUnderground` tell when a position is over one or in a cave.
+- The surface, caves, trees and grass render forward or, under deferred rendering, into the GBuffer (leaves keep their
+  translucency there, added to the lighting buffer).
 - The surface, trees and grass are drawn through `BatchRendererGroup`: GPU-displaced CDLOD patches, and trees with
   per-tree LOD crossfade and impostors at 16 bytes of GPU memory a tree.
 - Terrain mesh collision, tree trunk capsules and cave colliders are streamed in chunks around focus transforms

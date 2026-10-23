@@ -4,6 +4,14 @@
 - Bake Probes now really bakes against the caves: their probe proxies were merged with `CombineMeshes`, which drops
   the vertices of the cave meshes' compressed formats, so the proxies were empty (no probes placed around caves, no
   occlusion in them or under arches). They are merged by hand into plain float positions and normals.
+- The terrain and cave surfaces render deferred: `Strata/TerrainSurface` and `Strata/CaveSurface` have a GBuffer pass
+  (as URP's Lit: albedo, specular, smoothness, normal, and their probe and reflection lighting into the lighting
+  buffer; decals applied) and their forward pass is `UniversalForward` instead of `UniversalForwardOnly`, so under
+  deferred rendering they are in the GBuffer for deferred lights and everything that reads it. The lit passes share
+  their surface code (`StrataTerrainPasses.hlsl`, `StrataCavePasses.hlsl`).
+- Trees, grass and impostors render deferred too: `Strata/Tree` and `Strata/TreeImpostor` get the same GBuffer pass
+  (`StrataTreePasses.hlsl`, `StrataTreeImpostorPasses.hlsl`), with the light through the leaves (the main light from
+  behind, `StrataTranslucency.hlsl`) added to the lighting buffer, so they look as they did forward.
 
 ## 0.12.0
 Cave formations.
