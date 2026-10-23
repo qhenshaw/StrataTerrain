@@ -186,6 +186,8 @@ namespace Strata
             cmd.SetComputeTextureParam(_shader, _scatter, "_StrataHeights", _heights.Texture);
             cmd.SetComputeTextureParam(_shader, _scatter, "_StrataFarHeights", _heights.FarTexture);
             cmd.SetComputeBufferParam(_shader, _scatter, "_StrataTileSlots", _heights.TileSlotBuffer);
+            cmd.SetComputeTextureParam(_shader, _scatter, "_StrataHoles", _heights.Holes.Texture);
+            cmd.SetComputeBufferParam(_shader, _scatter, "_StrataHoleSlots", _heights.Holes.TileSlotBuffer);
             int2 far = StrataHeights.FarSamples(grid) - 1;
             cmd.SetComputeVectorParam(_shader, "_StrataFar", new Vector4(far.x, far.y, 0f, 0f));
             cmd.SetComputeTextureParam(_shader, _scatter, "_GrassMap", _map.Texture);

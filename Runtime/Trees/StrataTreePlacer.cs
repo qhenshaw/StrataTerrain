@@ -146,7 +146,7 @@ namespace Strata
                     if (math.any(p.Position < area.Min) || math.any(p.Position >= areaMax)) continue;
                     uint at = Mix(math.asuint(p.Position.x), math.asuint(p.Position.y), 0x3c6ef372u);
                     if (Unit(at) >= DensityAt(Slices - 2, p.Position)) continue;
-                    if (Heights.Sample(p.Position) < SeaLevel) continue;
+                    if (Heights.Sample(p.Position) < SeaLevel || Heights.IsHole(p.Position)) continue;
                     Species s = Species[p.Species];
                     Stand(ref area, p.Position, s.Spacing * Room);
                     if (InTile(p.Position, tileXZ)) Emit(p.Position, p.Species, Mix(at ^ 0xa54ff53au), 0.5f);
@@ -290,7 +290,7 @@ namespace Strata
                 float density = DensityAt(s.Forest, position) * scale;
                 if (draw >= density) return false;
                 float height = Heights.Sample(position);
-                if (height < SeaLevel) return false;
+                if (height < SeaLevel || Heights.IsHole(position)) return false;
                 float slope = math.degrees(math.atan(math.length(Gradient(position))));
                 float moisture = DensityAt(Slices - 1, position);
                 float total = 0f, own = 0f;

@@ -12,7 +12,7 @@ namespace Strata
     }
 
     // The authored shape of a Strata world, as a block on its StrataWorld: the tile grid and height range, how far each
-    // CDLOD level reaches, and how collision streams. A bake copies the grid into the world's baked data so the baked
+    // CDLOD level reaches, how collision streams, and how finely caves are meshed. A bake copies the grid into the world's baked data so the baked
     // tiles keep working even if these settings are edited later.
     [Serializable]
     public class StrataWorldSettings
@@ -67,6 +67,17 @@ namespace Strata
         [SerializeField, Min(0f)] private float _collisionRadius = 192f;
         [SerializeField] private int _collisionLayer;
 
+        [Header("Caves")]
+        [Tooltip("Size of the cells cave and rock features are meshed in, in metres; rounded so a tile holds a whole number of " +
+                 "128-cell blocks. Shapes need to be about four cells across to stay round.")]
+        [SerializeField, Min(0.25f)] private float _caveVoxelSize = 1f;
+        [SerializeField] private bool _caveShadows = true;
+        [Tooltip("Caves that reach the surface show full detail within this distance, then coarser (half detail out to 2.5 " +
+                 "times it, then quarter), in metres.")]
+        [SerializeField, Min(8f)] private float _caveLodDistance = 64f;
+        [Tooltip("Caves that are all underground are drawn within this distance, in metres.")]
+        [SerializeField, Min(16f)] private float _caveUndergroundDistance = 200f;
+
         [Header("Probes")]
         [Tooltip("The closest baked light probes get (near the terrain and trees), in metres; the farthest is 27 times this. " +
                  "Closer is costlier: per square kilometre, 9 m baked about 6.7 MB of cell data and 27 m about 1 MB.")]
@@ -100,6 +111,10 @@ namespace Strata
         public float CollisionRadius => _collisionRadius;
         public int CollisionLayer => _collisionLayer;
         public float ProbeMinSpacing => _probeMinSpacing;
+        public float CaveVoxelSize => _caveVoxelSize;
+        public bool CaveShadows => _caveShadows;
+        public float CaveLodDistance => _caveLodDistance;
+        public float CaveUndergroundDistance => _caveUndergroundDistance;
 
         // Clamps the settings to what the world can use; called by the StrataWorld when it is edited.
         public void Validate()
@@ -109,6 +124,9 @@ namespace Strata
             float spacing = _tileSize / _tileResolution;
             _collisionChunkSize = math.max(spacing, math.round(_collisionChunkSize / spacing) * spacing);
             _collisionLayer = math.clamp(_collisionLayer, 0, 31);
+            // cave bricks are 32 cells, and the coarser cave levels 64 and 128, so all of them line up with tiles
+            int blocks = math.max(1, (int)math.round(_tileSize / (128f * math.clamp(_caveVoxelSize, 0.25f, 4f))));
+            _caveVoxelSize = _tileSize / (128f * blocks);
         }
     }
 }

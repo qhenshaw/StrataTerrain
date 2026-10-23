@@ -11,7 +11,7 @@ namespace Strata
 {
     // Streams terrain collision as MeshCollider chunks around a set of focus transforms (players, NPC crowds, the
     // camera). Each chunk is a full-resolution grid built from the CPU heights in a Burst job and baked for PhysX on
-    // worker threads; colliders are pooled. ChunkActivated fires once a chunk's collider is assigned and live, so a
+    // worker threads, without the triangles over cave holes (StrataCaveColliders covers the caves); colliders are pooled. ChunkActivated fires once a chunk's collider is assigned and live, so a
     // NavMesh builder that collects physics colliders can rebuild over it; ChunkDeactivated fires before it goes.
     // The meshes stay CPU-readable, which NavMesh source collection needs.
     public sealed class StrataCollision : IDisposable
@@ -218,6 +218,8 @@ namespace Strata
             public int2 Quads;
             public Mesh.MeshData Mesh;
 
+            private bool Solid(int2 sample) => Heights.Presence(sample) >= 0.5f;
+
             public void Execute()
             {
                 NativeArray<float3> vertices = Mesh.GetVertexData<float3>();
@@ -229,13 +231,18 @@ namespace Strata
                     int2 sample = First + new int2(x, z);
                     vertices[z * across + x] = new float3(x * Heights.Grid.Spacing, Heights.At(sample), z * Heights.Grid.Spacing);
                 }
+                // a triangle touching a hole sample is left degenerate, which cooking (mesh cleaning) removes
                 int n = 0;
                 for (int z = 0; z < Quads.y; z++)
                 for (int x = 0; x < Quads.x; x++)
                 {
                     int i = z * across + x;
-                    indices[n++] = i; indices[n++] = i + across; indices[n++] = i + 1;
-                    indices[n++] = i + 1; indices[n++] = i + across; indices[n++] = i + across + 1;
+                    int2 sample = First + new int2(x, z);
+                    bool a = Solid(sample), b = Solid(sample + new int2(1, 0)), c = Solid(sample + new int2(0, 1)), d = Solid(sample + new int2(1, 1));
+                    if (a && c && b) { indices[n++] = i; indices[n++] = i + across; indices[n++] = i + 1; }
+                    else { indices[n++] = i; indices[n++] = i; indices[n++] = i; }
+                    if (b && c && d) { indices[n++] = i + 1; indices[n++] = i + across; indices[n++] = i + across + 1; }
+                    else { indices[n++] = i; indices[n++] = i; indices[n++] = i; }
                 }
             }
         }

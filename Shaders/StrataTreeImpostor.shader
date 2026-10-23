@@ -2,7 +2,7 @@
 // renders each prototype from a grid of directions over its upper hemisphere (laid out hemi-octahedrally) into two
 // atlases: albedo with coverage, and normals in the tree's own space with foliage. Here each tree shows the frame
 // nearest the direction it's seen from (in its own turned space) on a quad facing that way, lit with URP's PBR lighting
-// like Strata/Tree. The quad is trimmed to the frame's silhouette (Frame Bounds, one texel per frame: how far in from
+// like Strata/Tree (StrataTreeImpostorPasses.hlsl: forward, or into the GBuffer under deferred). The quad is trimmed to the frame's silhouette (Frame Bounds, one texel per frame: how far in from
 // each edge the tree starts), so far fewer transparent pixels are shaded. Shadow passes pick the frame and face the
 // quad by the light's direction instead; Shadow Push moves that quad towards the light by a fraction of the tree's
 // radius, which StrataTreeRenderer uses when the quad casts a mesh LOD's shadow, so the mesh behind it stays shaded.
@@ -116,88 +116,50 @@ Shader "Strata/TreeImpostor"
         Pass
         {
             Name "ForwardLit"
-            Tags { "LightMode" = "UniversalForwardOnly" }
+            Tags { "LightMode" = "UniversalForward" }
 
             HLSLPROGRAM
             #pragma vertex Vert
-            #pragma fragment Frag
+            #pragma fragment FragForward
             #pragma multi_compile_fog
             #pragma multi_compile _ _MAIN_LIGHT_SHADOWS _MAIN_LIGHT_SHADOWS_CASCADE _MAIN_LIGHT_SHADOWS_SCREEN
             #pragma multi_compile_fragment _ _SHADOWS_SOFT _SHADOWS_SOFT_LOW _SHADOWS_SOFT_MEDIUM _SHADOWS_SOFT_HIGH
             #pragma multi_compile_fragment _ _SCREEN_SPACE_OCCLUSION
-
             #include_with_pragmas "Packages/com.unity.render-pipelines.universal/ShaderLibrary/ProbeVolumeVariants.hlsl"
             #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Lighting.hlsl"
             #include "StrataGI.hlsl"
+            #include "StrataTreeImpostorPasses.hlsl"
+            ENDHLSL
+        }
 
-            struct Varyings
-            {
-                float4 positionCS : SV_POSITION;
-                float3 positionWS : TEXCOORD0;
-                float2 uv : TEXCOORD1;
-                nointerpolation float3 origin : TEXCOORD2;
-                nointerpolation float2 sinCos : TEXCOORD3;
-                nointerpolation float fade : TEXCOORD4;
-                float fogFactor : TEXCOORD5;
-                UNITY_VERTEX_INPUT_INSTANCE_ID
-            };
+        Pass
+        {
+            // what deferred rendering draws instead of ForwardLit: the surface into the GBuffer, light through the leaves
+            // included
+            Name "GBuffer"
+            Tags { "LightMode" = "UniversalGBuffer" }
+            ZWrite On
+            ZTest LEqual
 
-            Varyings Vert(Attributes input)
-            {
-                UNITY_SETUP_INSTANCE_ID(input);
-                Varyings output = (Varyings)0;
-                UNITY_TRANSFER_INSTANCE_ID(input, output);
-                Impostor impostor = PlaceImpostor(input, _WorldSpaceCameraPos, true);
-                output.positionWS = impostor.positionWS;
-                output.positionCS = TransformWorldToHClip(impostor.positionWS);
-                output.uv = impostor.uv;
-                output.origin = impostor.origin;
-                output.sinCos = impostor.sinCos;
-                output.fade = impostor.fade;
-                output.fogFactor = ComputeFogFactor(output.positionCS.z);
-                return output;
-            }
+            HLSLPROGRAM
+            #pragma exclude_renderers gles3 glcore
+            #pragma vertex Vert
+            #pragma fragment FragGBuffer
+            #pragma multi_compile _ _MAIN_LIGHT_SHADOWS _MAIN_LIGHT_SHADOWS_CASCADE _MAIN_LIGHT_SHADOWS_SCREEN
+            #pragma multi_compile_fragment _ _REFLECTION_PROBE_BLENDING
+            #pragma multi_compile_fragment _ _REFLECTION_PROBE_BOX_PROJECTION
+            #pragma multi_compile_fragment _ _SHADOWS_SOFT _SHADOWS_SOFT_LOW _SHADOWS_SOFT_MEDIUM _SHADOWS_SOFT_HIGH
+            #pragma multi_compile_fragment _ _DBUFFER_MRT1 _DBUFFER_MRT2 _DBUFFER_MRT3
+            #pragma multi_compile_fragment _ _RENDER_PASS_ENABLED
+            #pragma multi_compile _ _CLUSTER_LIGHT_LOOP
+            #pragma multi_compile_fragment _ _GBUFFER_NORMALS_OCT
+            #include_with_pragmas "Packages/com.unity.render-pipelines.universal/ShaderLibrary/RenderingLayers.hlsl"
+            #include_with_pragmas "Packages/com.unity.render-pipelines.universal/ShaderLibrary/ProbeVolumeVariants.hlsl"
 
-            half4 Frag(Varyings input) : SV_Target
-            {
-                UNITY_SETUP_INSTANCE_ID(input);
-                StrataFadeClip(input.positionCS.xy, input.fade);
-                half4 albedo = SampleAlbedo(input.uv);
-                half4 packed = SAMPLE_TEXTURE2D(_Normals, sampler_Normals, input.uv);
-                float3 normalWS = normalize(StrataRotateY(packed.rgb * 2.0 - 1.0, input.sinCos));
-                float foliage = packed.a;
-                albedo.rgb = StrataTreeTint(albedo.rgb, input.origin, foliage, _HueVariation, _BrightnessVariation) * _Brightness;
-
-                InputData inputData = (InputData)0;
-                inputData.positionWS = input.positionWS;
-                inputData.positionCS = input.positionCS;
-                inputData.normalWS = normalWS;
-                inputData.viewDirectionWS = GetWorldSpaceNormalizeViewDir(input.positionWS);
-                #if defined(_MAIN_LIGHT_SHADOWS_SCREEN)
-                    inputData.shadowCoord = ComputeScreenPos(input.positionCS);
-                #else
-                    inputData.shadowCoord = TransformWorldToShadowCoord(input.positionWS);
-                #endif
-                inputData.fogCoord = input.fogFactor;
-                inputData.bakedGI = StrataBakedGI(inputData.positionWS, inputData.normalWS, inputData.viewDirectionWS, input.positionCS);
-                inputData.normalizedScreenSpaceUV = GetNormalizedScreenSpaceUV(input.positionCS);
-                inputData.shadowMask = 1;
-
-                SurfaceData surfaceData = (SurfaceData)0;
-                surfaceData.albedo = albedo.rgb;
-                surfaceData.smoothness = _Smoothness;
-                surfaceData.occlusion = 1.0;
-                surfaceData.normalTS = half3(0, 0, 1);
-                surfaceData.alpha = 1.0;
-                half4 colour = UniversalFragmentPBR(inputData, surfaceData);
-
-                Light light = GetMainLight(inputData.shadowCoord);
-                half back = saturate(dot(-normalWS, light.direction) * 0.5 + 0.5);
-                colour.rgb += albedo.rgb * light.color * (back * back * _Translucency * foliage * light.shadowAttenuation);
-                colour.rgb = MixFog(colour.rgb, inputData.fogCoord);
-                colour.a = 1.0;
-                return colour;
-            }
+            #define STRATA_GBUFFER
+            #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Lighting.hlsl"
+            #include "StrataGI.hlsl"
+            #include "StrataTreeImpostorPasses.hlsl"
             ENDHLSL
         }
 

@@ -1,12 +1,12 @@
 {
   "displayName": "Strata Terrain",
   "author": "Quin Henshaw",
-  "version": "0.9.0",
+  "version": "0.12.1",
   "name": "com.qhenshaw.terrain",
   "documentationUrl": "https://github.com/qhenshaw/Terrain",
   "changelogUrl": "https://github.com/qhenshaw/Terrain/blob/main/CHANGELOG.md",
   "licensesUrl": "https://github.com/qhenshaw/Terrain/blob/main/LICENSE.md",
-  "description": "Non-destructive tiled terrain: heights built from texture, noise and spline stamps with filters and erosion, baked to compact tiles streamed by distance, drawn as GPU-displaced CDLOD patches through BatchRendererGroup, with automatic forests and GPU-generated grass drawn the same way and streamed terrain and trunk collision.",
+  "description": "Non-destructive tiled terrain: heights built from texture, noise and spline stamps with filters and erosion, baked to compact tiles streamed by distance, drawn as GPU-displaced CDLOD patches through BatchRendererGroup, with automatic forests and GPU-generated grass drawn the same way, baked caves, tunnels and rock arches, and streamed terrain, trunk and cave collision.",
   "unity": "6000.6",
   "dependencies": {
     "com.unity.burst": "1.8.18",

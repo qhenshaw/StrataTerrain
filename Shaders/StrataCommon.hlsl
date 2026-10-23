@@ -1,6 +1,7 @@
 // Shared code for Strata/TerrainSurface: the per-material and per-instance properties, height lookups across the
-// world's tiles (each tile's slot in the texture arrays, or the far copy where it isn't resident), and CDLOD placement
-// of the shared patch mesh. Included after URP's Core.hlsl.
+// world's tiles (each tile's slot in the texture arrays, or the far copy where it isn't resident), holes cut by caves,
+// and CDLOD placement of the shared patch mesh. Included after URP's Core.hlsl; a shader with its own vertex input
+// defines STRATA_CUSTOM_ATTRIBUTES first.
 #ifndef STRATA_COMMON_INCLUDED
 #define STRATA_COMMON_INCLUDED
 
@@ -42,11 +43,13 @@ SAMPLER(sampler_linear_clamp);
 // The camera the CDLOD levels were chosen for; set per camera so shadow passes morph exactly like the main view.
 float3 _StrataCameraPosition;
 
+#ifndef STRATA_CUSTOM_ATTRIBUTES
 struct Attributes
 {
     float4 positionOS : POSITION;
     UNITY_VERTEX_INPUT_INSTANCE_ID
 };
+#endif
 
 // The tile holding a world xz, its position within the tile (0..1), and the tile's slot (-1 if not resident).
 int StrataSlot(float2 positionXZ, out float2 local, out float2 relative)
@@ -77,6 +80,31 @@ float StrataHeight(float2 positionXZ)
     }
     float2 uv = (local * _StrataHeightParams.z + 0.5) / (_StrataHeightParams.z + 1.0);
     return _StrataHeightParams.x + SAMPLE_TEXTURE2D_ARRAY_LOD(_StrataHeights, sampler_linear_clamp, uv, slot, 0).r * _StrataHeightParams.y;
+}
+
+// Holes ---------------------------------------------------------------------------------------------------------------
+TEXTURE2D_ARRAY(_StrataHoles);              // terrain presence per height sample, below 0.5 a hole
+StructuredBuffer<int> _StrataHoleSlots;     // per tile: its slot in _StrataHoles, or -1 for no holes
+
+// Terrain presence at a world xz (bilinear between samples, like the heights): 1 solid, below 0.5 a hole.
+float StrataPresence(float2 positionXZ)
+{
+    float2 tiles = float2(_StrataGrid.w, _StrataLod.z);
+    float2 relative = (positionXZ - _StrataGrid.xy) / _StrataGrid.z;
+    float2 tile = clamp(floor(relative), 0.0, tiles - 1.0);
+    float2 local = clamp(relative - tile, 0.0, 1.0);
+    int slot = _StrataHoleSlots[(int)(tile.y * tiles.x + tile.x)];
+    if (slot < 0) return 1.0;
+    float2 uv = (local * _StrataHeightParams.z + 0.5) / (_StrataHeightParams.z + 1.0);
+    return SAMPLE_TEXTURE2D_ARRAY_LOD(_StrataHoles, sampler_linear_clamp, uv, slot, 0).r;
+}
+
+// Discards terrain pixels over a hole, in the _STRATA_HOLES variant (drawn only for nodes that have holes).
+void StrataClipHole(float2 positionXZ)
+{
+#ifdef _STRATA_HOLES
+    clip(StrataPresence(positionXZ) - 0.5);
+#endif
 }
 
 float3 StrataNormal(float2 positionXZ)

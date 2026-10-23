@@ -17,6 +17,8 @@
 Texture2DArray<float> _StrataHeights;
 Texture2D<float> _StrataFarHeights;
 StructuredBuffer<int> _StrataTileSlots;     // per tile: its slot, or -1 (no grass, far heights)
+Texture2DArray<float> _StrataHoles;         // terrain presence per height sample, below 0.5 a cave hole
+StructuredBuffer<int> _StrataHoleSlots;     // per tile: its slot in _StrataHoles, or -1 for no holes
 float4 _StrataFar;                          // far height quads x, z
 Texture2DArray<float> _GrassMap;
 SamplerState sampler_linear_clamp;
@@ -68,6 +70,19 @@ float HeightAt(float2 positionXZ)
     }
     float2 uv = (local * _StrataHeightParams.z + 0.5) / (_StrataHeightParams.z + 1.0);
     return _StrataHeightParams.x + _StrataHeights.SampleLevel(sampler_linear_clamp, float3(uv, slice), 0) * _StrataHeightParams.y;
+}
+
+// Terrain presence (below 0.5 a cave hole), bilinear between height samples like the surface shader clips it.
+float PresenceAt(float2 positionXZ)
+{
+    float2 tiles = float2(_StrataGrid.w, _GrassGrid.x);
+    float2 relative = (positionXZ - _StrataGrid.xy) / _StrataGrid.z;
+    float2 tile = clamp(floor(relative), 0.0, tiles - 1.0);
+    float2 local = clamp(relative - tile, 0.0, 1.0);
+    int slot = _StrataHoleSlots[(int)(tile.y * tiles.x + tile.x)];
+    if (slot < 0) return 1.0;
+    float2 uv = (local * _StrataHeightParams.z + 0.5) / (_StrataHeightParams.z + 1.0);
+    return _StrataHoles.SampleLevel(sampler_linear_clamp, float3(uv, slot), 0);
 }
 
 float DensityAt(float2 positionXZ, int type)
@@ -133,6 +148,7 @@ void GrassScatter(uint3 id : SV_DispatchThreadID)
     uint h4 = Hash(uint3(h0, 4u, 17u));
     if (Unit(h4) >= fade) return;
 
+    if (PresenceAt(p) < 0.5) return;
     float height = HeightAt(p);
     // the clumps left grow as their neighbours are thinned away (by the square root, to keep the covered area), easing
     // back down over the last tenth of the range so the edge doesn't pop

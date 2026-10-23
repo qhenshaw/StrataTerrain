@@ -6,7 +6,8 @@ namespace Strata
     // A read-only view of a world's CPU heights for jobs and queries. Full-resolution samples live in slots (one tile's
     // samples each), found through the tile-to-slot map; where a tile isn't resident, heights come from the far copy:
     // every FarStep-th sample of the whole world, which is exactly the vertex grid of the CDLOD levels drawn beyond the
-    // resident tiles, so near and far patches meet without cracks.
+    // resident tiles, so near and far patches meet without cracks. Holes cut by caves come from StrataHoles in the same
+    // way (a tile without a hole slot is solid; a tile that isn't resident has none).
     public struct StrataHeights
     {
         // far heights keep every FarStep-th sample; far splats every FarSplatStep-th texel
@@ -17,6 +18,8 @@ namespace Strata
         [ReadOnly] public NativeArray<ushort> Slots;
         [ReadOnly] public NativeArray<int> TileSlots;
         [ReadOnly] public NativeArray<ushort> Far;
+        [ReadOnly] public NativeArray<byte> Holes;
+        [ReadOnly] public NativeArray<int> HoleSlots;
 
         public static int2 FarSamples(StrataGrid grid) => new int2(grid.TilesX, grid.TilesZ) * grid.Resolution / FarStep + 1;
         public static int2 FarSplatSamples(StrataGrid grid) => new int2(grid.TilesX, grid.TilesZ) * grid.SplatResolution / FarSplatStep + 1;
@@ -52,6 +55,31 @@ namespace Strata
             float2 t = sample - cell;
             return math.lerp(math.lerp(At(cell), At(cell + new int2(1, 0)), t.x), math.lerp(At(cell + new int2(0, 1)), At(cell + new int2(1, 1)), t.x), t.y);
         }
+
+        // Terrain presence at a world sample: 1 solid, below 0.5 a hole.
+        public float Presence(int2 sample)
+        {
+            if (!HoleSlots.IsCreated) return 1f;
+            sample = math.clamp(sample, 0, new int2(Grid.WorldSamplesX - 1, Grid.WorldSamplesZ - 1));
+            int2 tile = Grid.SampleTile(sample);
+            int index = Grid.TileIndex(tile.x, tile.y);
+            int slot = HoleSlots[index];
+            if (slot < 0 || TileSlots[index] < 0) return 1f;
+            int2 local = sample - tile * Grid.Resolution;
+            return Holes[slot * Grid.SamplesPerTile + local.y * Grid.Samples + local.x] / 255f;
+        }
+
+        // Bilinear presence at a world position, as the surface shader clips it.
+        public float SamplePresence(float2 position)
+        {
+            float2 sample = (position - Grid.Origin) / Grid.Spacing;
+            int2 cell = (int2)math.floor(sample);
+            float2 t = sample - cell;
+            return math.lerp(math.lerp(Presence(cell), Presence(cell + new int2(1, 0)), t.x),
+                             math.lerp(Presence(cell + new int2(0, 1)), Presence(cell + new int2(1, 1)), t.x), t.y);
+        }
+
+        public bool IsHole(float2 position) => SamplePresence(position) < 0.5f;
 
         private float FarAt(float2 farSample)
         {

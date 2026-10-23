@@ -95,7 +95,8 @@ namespace Strata.Editor
         {
             foreach (Transform child in parent)
             {
-                if (!child.gameObject.activeInHierarchy) continue;
+                // skips the world's own generated objects (cave meshes, collision)
+                if (!child.gameObject.activeInHierarchy || (child.hideFlags & HideFlags.DontSave) != 0) continue;
                 StrataFeature feature = child.GetComponent<StrataFeature>();
                 if (feature == null || !feature.enabled)
                 {
@@ -228,6 +229,7 @@ namespace Strata.Editor
                     case FilterFeature filter: RunFilter(grid, filter, heights, before, region, clip); break;
                     case StampGroup group: RunGroup(grid, group, node.Children, heights, before, region, clip); break;
                     case RockStrata strata: RunRockStrata(grid, strata, heights, before, region, clip); break;
+                    case CaveTunnel { MouthCarve: true } tunnel: RunMouths(grid, tunnel, heights, before, region, clip); break;
                 }
                 if (before != null) RenderTexture.ReleaseTemporary(before);
             }
@@ -270,13 +272,31 @@ namespace Strata.Editor
             Dispatch(_height, kernel, clip.width, clip.height);
         }
 
+        // A tunnel's mouth carve: its mouth points as a road (pulled to the floor's height), blended with Min.
+        private void RunMouths(StrataGrid grid, CaveTunnel tunnel, RenderTexture heights, RenderTexture before, RectInt region, RectInt clip)
+        {
+            int count = UploadPoints(tunnel.MouthPoints);
+            if (count < 2) return;
+            int kernel = _height.FindKernel("SplineFeature");
+            SetCommon(_height, kernel, grid, tunnel, heights, before, region, clip);
+            SetCurve(_curve, AnimationCurve.EaseInOut(0f, 1f, 1f, 0f));
+            SetCurve(_profile, AnimationCurve.Constant(0f, 1f, 1f));
+            _height.SetBuffer(kernel, "_SplinePositions", _splinePositions);
+            _height.SetBuffer(kernel, "_SplineShapes", _splineShapes);
+            _height.SetInt("_SplineCount", count);
+            _height.SetVector("_SplineParams", new Vector4((int)StrataSplineMode.Road, 0f));
+            Dispatch(_height, kernel, clip.width, clip.height);
+        }
+
         public ComputeBuffer SplinePositions => _splinePositions;
         public ComputeBuffer SplineShapes => _splineShapes;
 
         // Uploads a spline feature's sampled points to SplinePositions and SplineShapes; returns how many.
-        public int UploadSpline(SplineFeature spline)
+        public int UploadSpline(SplineFeature spline) => UploadPoints(spline.Points);
+
+        // Uploads spline points to SplinePositions and SplineShapes; returns how many.
+        public int UploadPoints(IReadOnlyList<SplineFeature.Point> points)
         {
-            IReadOnlyList<SplineFeature.Point> points = spline.Points;
             if (points.Count < 2) return points.Count;
             _positions.Clear();
             _shapes.Clear();

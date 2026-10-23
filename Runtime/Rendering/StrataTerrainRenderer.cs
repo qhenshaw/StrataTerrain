@@ -17,7 +17,9 @@ namespace Strata
     // frustum-culling nodes against their height bounds and choosing levels by camera distance, and writes the
     // visible instance list; shadow views group instances by the cascades that see them. Leaf nodes holding rock strata
     // can be swapped, within the strata's geometry range, for four detail instances at twice the density (level -1),
-    // which the shader keeps on the leaf grid at their edges so they still meet their neighbours exactly.
+    // which the shader keeps on the leaf grid at their edges so they still meet their neighbours exactly. Nodes over a
+    // cave hole are drawn with a second material, the shader's _STRATA_HOLES variant, which clips the holes; the rest keep
+    // the plain variant so they still get early depth testing.
     public sealed unsafe class StrataTerrainRenderer : IDisposable
     {
         private const int HeaderBytes = 64;
@@ -30,24 +32,7 @@ namespace Strata
         private static readonly int ObjectToWorldId = Shader.PropertyToID("unity_ObjectToWorld");
         private static readonly int WorldToObjectId = Shader.PropertyToID("unity_WorldToObject");
         private static readonly int NodeId = Shader.PropertyToID("_StrataNode");
-        private static readonly int HeightsId = Shader.PropertyToID("_StrataHeights");
-        private static readonly int GridId = Shader.PropertyToID("_StrataGrid");
-        private static readonly int HeightParamsId = Shader.PropertyToID("_StrataHeightParams");
-        private static readonly int LodId = Shader.PropertyToID("_StrataLod");
-        private static readonly int SplatIndicesId = Shader.PropertyToID("_StrataSplatIndices");
-        private static readonly int SplatWeightsId = Shader.PropertyToID("_StrataSplatWeights");
-        private static readonly int SplatParamsId = Shader.PropertyToID("_StrataSplatParams");
-        private static readonly int LayerAlbedoId = Shader.PropertyToID("_StrataLayerAlbedo");
-        private static readonly int LayerNormalId = Shader.PropertyToID("_StrataLayerNormal");
-        private static readonly int LayerMaskId = Shader.PropertyToID("_StrataLayerMask");
-        private static readonly int LayerDataId = Shader.PropertyToID("_StrataLayerData");
-        private static readonly int RockMapId = Shader.PropertyToID("_StrataRockMap");
-        private static readonly int BandsId = Shader.PropertyToID("_StrataBands");
-        private static readonly int FarHeightsId = Shader.PropertyToID("_StrataFarHeights");
-        private static readonly int FarSplatIndicesId = Shader.PropertyToID("_StrataFarSplatIndices");
-        private static readonly int FarSplatWeightsId = Shader.PropertyToID("_StrataFarSplatWeights");
-        private static readonly int FarId = Shader.PropertyToID("_StrataFar");
-        private static readonly int TileSlotsId = Shader.PropertyToID("_StrataTileSlots");
+        private const string HolesKeyword = "_STRATA_HOLES";
         // tiles that aren't resident are drawn no finer than this level, whose vertices fall on the far copy's samples
         private const int FarLevel = 3;
         // detail patches only where the leaf level isn't morphing yet, so their forced edges match it
@@ -58,9 +43,11 @@ namespace Strata
         private readonly GraphicsBuffer _instanceData;
         private readonly Mesh _mesh;
         private readonly Material _material;
+        private readonly Material _holeMaterial;
         private readonly BatchID _batch;
         private readonly BatchMeshID _meshId;
         private readonly BatchMaterialID _materialId;
+        private readonly BatchMaterialID _holeMaterialId;
         private readonly float _leafRange;
         private readonly int _detailCount;
         private StrataSplatmap _splats;
@@ -77,6 +64,9 @@ namespace Strata
         public int LastVisiblePatches { get; private set; }
         public int Layer { get; set; }
         public Material Material => _material;
+        public GraphicsBuffer Bands => _bands;
+        // _StrataLod: leaf range, morph start, tiles z, detail range
+        public Vector4 Lod => new(_leafRange, MorphStart, _heights.Grid.TilesZ, _leafRange * DetailLimit);
 
         public StrataTerrainRenderer(StrataHeightfield heights, Material material, float lodDistanceRatio)
         {
@@ -85,11 +75,15 @@ namespace Strata
             _leafRange = grid.NodeSize(0) * lodDistanceRatio;
 
             _material = new(material) { name = material.name + " (Strata)", hideFlags = HideFlags.HideAndDontSave };
+            _material.DisableKeyword(HolesKeyword);
+            _holeMaterial = new(material) { name = material.name + " (Strata Holes)", hideFlags = HideFlags.HideAndDontSave };
+            _holeMaterial.EnableKeyword(HolesKeyword);
 
             _mesh = BuildPatchMesh();
             _brg = new(OnPerformCulling, IntPtr.Zero);
             _meshId = _brg.RegisterMesh(_mesh);
             _materialId = _brg.RegisterMaterial(_material);
+            _holeMaterialId = _brg.RegisterMaterial(_holeMaterial);
 
             _detailCount = grid.TileCount * grid.LeavesPerSide * grid.LeavesPerSide * 4;
             _noDetail = new(grid.TileCount * grid.LeavesPerSide * grid.LeavesPerSide, Allocator.Persistent);
@@ -157,32 +151,8 @@ namespace Strata
         // the shader is reimported, so the world calls this before each camera renders.
         public void Rebind()
         {
-            StrataGrid grid = _heights.Grid;
-            _material.SetTexture(HeightsId, _heights.Texture);
-            _material.SetTexture(FarHeightsId, _heights.FarTexture);
-            _material.SetBuffer(TileSlotsId, _heights.TileSlotBuffer);
-            int2 far = StrataHeights.FarSamples(grid) - 1, farSplats = StrataHeights.FarSplatSamples(grid) - 1;
-            _material.SetVector(FarId, new Vector4(far.x, far.y, farSplats.x, farSplats.y));
-            _material.SetVector(GridId, new Vector4(grid.Origin.x, grid.Origin.y, grid.TileSize, grid.TilesX));
-            _material.SetVector(HeightParamsId, new Vector4(grid.MinHeight, grid.HeightRange, grid.Resolution, grid.Spacing));
-            _material.SetVector(LodId, new Vector4(_leafRange, MorphStart, grid.TilesZ, _leafRange * DetailLimit));
-            if (_bands != null) _material.SetBuffer(BandsId, _bands);
-            if (_splats != null)
-            {
-                _material.SetTexture(SplatIndicesId, _splats.Indices);
-                _material.SetTexture(SplatWeightsId, _splats.Weights);
-                _material.SetTexture(RockMapId, _splats.Strata);
-                _material.SetTexture(FarSplatIndicesId, _splats.FarIndices);
-                _material.SetTexture(FarSplatWeightsId, _splats.FarWeights);
-            }
-            if (_palette != null)
-            {
-                _material.SetVector(SplatParamsId, new Vector4(grid.SplatResolution, _palette.LayerCount, 0f, 0f));
-                _material.SetTexture(LayerAlbedoId, _palette.Albedo);
-                _material.SetTexture(LayerNormalId, _palette.Normal);
-                _material.SetTexture(LayerMaskId, _palette.Mask);
-                _material.SetBuffer(LayerDataId, _palette.LayerData);
-            }
+            StrataMaterialBinding.Bind(_material, _heights, _splats, _palette, _bands, Lod);
+            StrataMaterialBinding.Bind(_holeMaterial, _heights, _splats, _palette, _bands, Lod);
         }
 
         // The rock strata definitions the strata map's indices refer to.
@@ -195,7 +165,8 @@ namespace Strata
             {
                 _bands?.Dispose();
                 _bands = new GraphicsBuffer(GraphicsBuffer.Target.Structured, packed.Length, 16);
-                _material.SetBuffer(BandsId, _bands);
+                StrataMaterialBinding.SetBands(_material, _bands);
+                StrataMaterialBinding.SetBands(_holeMaterial, _bands);
             }
             _bands.SetData(packed);
         }
@@ -207,11 +178,13 @@ namespace Strata
             if (_noDetail.IsCreated) _noDetail.Dispose();
             _brg.RemoveBatch(_batch);
             _brg.UnregisterMaterial(_materialId);
+            _brg.UnregisterMaterial(_holeMaterialId);
             _brg.UnregisterMesh(_meshId);
             _brg.Dispose();
             _instanceData.Dispose();
             UnityEngine.Object.DestroyImmediate(_mesh);
             UnityEngine.Object.DestroyImmediate(_material);
+            UnityEngine.Object.DestroyImmediate(_holeMaterial);
         }
 
         // A flat grid in patch units (0..32 on x and z); the shader scales and places it per node.
@@ -253,7 +226,7 @@ namespace Strata
             int splits = shadow ? math.clamp(context.cullingSplits.Length, 1, MaxSplits) : 1;
             BatchCullingOutputDrawCommands* commands = (BatchCullingOutputDrawCommands*)output.drawCommands.GetUnsafePtr();
             *commands = default;
-            commands->drawCommands = Malloc<BatchDrawCommand>(1 << splits);
+            commands->drawCommands = Malloc<BatchDrawCommand>(2 << splits);
             commands->drawRanges = Malloc<BatchDrawRange>(1);
             commands->visibleInstances = Malloc<int>(grid.NodeCount + _detailCount);
 
@@ -262,6 +235,7 @@ namespace Strata
             {
                 Grid = grid,
                 NodeMinMax = _heights.NodeMinMax,
+                NodeHoles = _heights.Holes.NodeHoles,
                 TileSlots = _heights.TileSlots,
                 FarLevel = math.min(FarLevel, grid.Levels - 1),
                 LeafDetailRange = _splats != null && _splats.LeafDetailRange.IsCreated ? _splats.LeafDetailRange : _noDetail,
@@ -276,6 +250,7 @@ namespace Strata
                 Batch = _batch,
                 Mesh = _meshId,
                 Material = _materialId,
+                HoleMaterial = _holeMaterialId,
                 Layer = (byte)Layer
             }.Schedule(_heights.Readers);
             // Culled inline rather than handing the job back: in the first frames after a group is created, a returned
@@ -295,6 +270,7 @@ namespace Strata
         {
             public StrataGrid Grid;
             [ReadOnly] public NativeArray<float2> NodeMinMax;
+            [ReadOnly] public NativeArray<byte> NodeHoles;
             [ReadOnly] public NativeArray<int> TileSlots;
             public int FarLevel;
             [ReadOnly] public NativeArray<float> LeafDetailRange;
@@ -309,11 +285,13 @@ namespace Strata
             public BatchID Batch;
             public BatchMeshID Mesh;
             public BatchMaterialID Material;
+            public BatchMaterialID HoleMaterial;
             public byte Layer;
 
             public void Execute()
             {
-                NativeList<int2> selected = new(1024, Allocator.Temp);
+                // instance, split mask, and 1 if it is over a hole
+                NativeList<int3> selected = new(1024, Allocator.Temp);
                 NativeList<int4> stack = new(64, Allocator.Temp);
                 int top = Grid.Levels - 1;
                 for (int tz = 0; tz < Grid.TilesZ; tz++)
@@ -334,6 +312,7 @@ namespace Strata
 
                     int mask = Visibility(min, max);
                     if (mask == 0) continue;
+                    int holed = NodeHoles[index];
                     if (level == 0)
                     {
                         // a leaf holding strata, near enough, is drawn as four denser detail patches instead
@@ -346,27 +325,29 @@ namespace Strata
                             {
                                 float3 childMin = min + new float3((c & 1) * half, 0f, (c >> 1) * half);
                                 int childMask = Visibility(childMin, new float3(childMin.x + half, max.y, childMin.z + half));
-                                if (childMask != 0) selected.Add(new int2(Grid.NodeCount + leaf * 4 + c, childMask));
+                                if (childMask != 0) selected.Add(new int3(Grid.NodeCount + leaf * 4 + c, childMask, holed));
                             }
                             continue;
                         }
-                        selected.Add(new int2(index, mask));
+                        selected.Add(new int3(index, mask, holed));
                         continue;
                     }
                     // a tile that isn't resident has only the far copy's samples to show, every 2^FarLevel quads
                     if (Distance(min, max) > LeafRange * (1 << (level - 1)) || level == FarLevel && TileSlots[tile] < 0)
                     {
-                        selected.Add(new int2(index, mask));
+                        selected.Add(new int3(index, mask, holed));
                         continue;
                     }
                     for (int c = 0; c < 4; c++)
                         stack.Add(new int4(tile, level - 1, node.z * 2 + (c & 1), node.w * 2 + (c >> 1)));
                 }
 
-                // bucket instances by the set of splits that see them, one draw command per set
-                int buckets = 1 << SplitCount;
+                // bucket instances by the set of splits that see them, and by whether they clip holes, one draw command per
+                // bucket
+                int sets = 1 << SplitCount;
+                int buckets = sets * 2;
                 NativeArray<int> counts = new(buckets, Allocator.Temp);
-                for (int i = 0; i < selected.Length; i++) counts[selected[i].y]++;
+                for (int i = 0; i < selected.Length; i++) counts[selected[i].y + selected[i].z * sets]++;
                 NativeArray<int> offsets = new(buckets, Allocator.Temp);
                 int commandCount = 0, total = 0;
                 for (int b = 0; b < buckets; b++)
@@ -378,10 +359,10 @@ namespace Strata
                         visibleOffset = (uint)total,
                         visibleCount = (uint)counts[b],
                         batchID = Batch,
-                        materialID = Material,
+                        materialID = b >= sets ? HoleMaterial : Material,
                         meshID = Mesh,
                         submeshIndex = 0,
-                        splitVisibilityMask = Shadow ? (ushort)b : (ushort)0xff,
+                        splitVisibilityMask = Shadow ? (ushort)(b % sets) : (ushort)0xff,
                         flags = BatchDrawCommandFlags.None,
                         sortingPosition = 0
                     };
@@ -389,8 +370,8 @@ namespace Strata
                 }
                 for (int i = 0; i < selected.Length; i++)
                 {
-                    int2 s = selected[i];
-                    Output->visibleInstances[offsets[s.y]++] = s.x;
+                    int3 s = selected[i];
+                    Output->visibleInstances[offsets[s.y + s.z * sets]++] = s.x;
                 }
 
                 Output->drawCommandCount = commandCount;
