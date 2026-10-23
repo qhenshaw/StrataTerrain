@@ -30,6 +30,7 @@ namespace Strata.Editor
             public Matrix4x4 Matrix;
             public int Order;
             public RectInt Area;
+            public bool Heights;
         }
 
         private sealed class WorldState
@@ -43,6 +44,10 @@ namespace Strata.Editor
             public int PlacementSignature;
             // world samples whose caves need evaluating again, once no height readback is outstanding
             public RectInt CaveDirty;
+            // the caves are meshed again in full (first sight, palette change) rather than just the bricks under CaveDirty
+            public bool CaveFull = true;
+            // world samples whose coarse cave levels wait for the edit being dragged to be let go
+            public RectInt CoarseDirty;
             public int PendingReadbacks;
             // tree density readbacks not yet stored, oldest first, with how many slices each has
             public readonly List<(int Tile, AsyncGPUReadbackRequest Request, int Slices)> PendingTrees = new();
@@ -137,6 +142,7 @@ namespace Strata.Editor
                     splatAll = true;
                     // cave vertices hold palette indices
                     if (hasCaves) caveDirty = StrataEvaluator.WorldRect(grid);
+                    state.CaveFull = true;
                 }
                 StrataWorldSettings settings = world.Settings;
                 int moistureSignature = System.HashCode.Combine(settings.UseSeaLevel, settings.SeaLevel, settings.MoistureSpacing,
@@ -181,6 +187,7 @@ namespace Strata.Editor
                     dirty = StrataEvaluator.WorldRect(grid);
                     splatAll = true;
                     if (hasCaves) caveDirty = StrataEvaluator.WorldRect(grid);
+                    state.CaveFull = true;
                 }
                 if (nodes.Count == 0) continue;
 
@@ -196,8 +203,18 @@ namespace Strata.Editor
                 if (caveDirty.width > 0 && caveDirty.height > 0) state.CaveDirty = StrataEvaluator.Union(state.CaveDirty, caveDirty);
                 if (state.CaveDirty.width > 0 && state.CaveDirty.height > 0 && state.PendingReadbacks == 0)
                     EvaluateCaves(world, state, nodes, caves);
+                else if (state.CoarseDirty.width > 0 && state.CoarseDirty.height > 0 && !Dragging && state.PendingReadbacks == 0)
+                {
+                    // the drag ended: the coarse levels catch up
+                    RectInt coarse = state.CoarseDirty;
+                    state.CoarseDirty = default;
+                    Caves.Mesh(world, caves, TilesTouching(grid, coarse), coarse);
+                    SceneView.RepaintAll();
+                }
             }
         }
+
+        private static bool Dragging => GUIUtility.hotControl != 0;
 
         // Cuts the holes and meshes the caves of the tiles the pending cave area touches, then repaints their splats and
         // trees (the caves' paint and tree effects, and no trees in holes).
@@ -208,8 +225,12 @@ namespace Strata.Editor
             RectInt area = state.CaveDirty;
             state.CaveDirty = default;
             List<int> tiles = TilesTouching(grid, area);
-            Caves.EvaluateSurface(world, caves, tiles);
-            Caves.Mesh(world, caves, tiles);
+            Caves.EvaluateSurface(world, caves, tiles, state.CaveFull ? null : area);
+            // while a handle is dragged only level 0 follows; the coarse levels catch up once it is let go
+            bool fineOnly = Dragging && !state.CaveFull;
+            Caves.Mesh(world, caves, tiles, state.CaveFull ? null : area, fineOnly);
+            if (fineOnly) state.CoarseDirty = StrataEvaluator.Union(state.CoarseDirty, area);
+            state.CaveFull = false;
             LastCaveMilliseconds = watch.Elapsed.TotalMilliseconds;
             world.NotifyHeightsChanged();
             EvaluateSplats(world, state, nodes, area, false);
@@ -319,7 +340,8 @@ namespace Strata.Editor
                     Version = feature.Version,
                     Matrix = feature.transform.localToWorldMatrix,
                     Order = order++,
-                    Area = StrataEvaluator.FeatureRect(grid, feature)
+                    Area = StrataEvaluator.FeatureRect(grid, feature),
+                    Heights = feature.AffectsHeights
                 };
                 bool added = !state.Features.TryGetValue(feature, out FeatureState before);
                 bool changed = added || before.Version != now.Version || before.Matrix != now.Matrix || before.Order != now.Order || !before.Area.Equals(now.Area);
@@ -327,6 +349,8 @@ namespace Strata.Editor
                 if (feature is StrataCaveFeature)
                 {
                     if (changed) caveDirty = StrataEvaluator.Union(added ? caveDirty : StrataEvaluator.Union(caveDirty, before.Area), now.Area);
+                    // a tunnel's mouth carve shapes the heights too
+                    if (changed && (now.Heights || before.Heights)) dirty = StrataEvaluator.Union(added ? dirty : StrataEvaluator.Union(dirty, before.Area), now.Area);
                 }
                 else if (changed && !feature.AffectsHeights) splatAll = true;
                 else if (added) dirty = StrataEvaluator.Union(dirty, now.Area);
@@ -342,6 +366,7 @@ namespace Strata.Editor
                     if (pair.Key is StrataCaveFeature)
                     {
                         caveDirty = StrataEvaluator.Union(caveDirty, pair.Value.Area);
+                        if (pair.Value.Heights) dirty = StrataEvaluator.Union(dirty, pair.Value.Area);
                         continue;
                     }
                     dirty = StrataEvaluator.Union(dirty, pair.Value.Area);

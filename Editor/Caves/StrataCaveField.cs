@@ -115,7 +115,9 @@ namespace Strata.Editor
                 d = math.min(d, PrimitiveDistance(primitive, p));
             }
             if (d >= Far) return Far;
-            if (shape.NoiseAmplitude > 0f) d += shape.NoiseAmplitude * Noise(p * shape.NoiseFrequency, shape.NoiseOctaves, shape.Seed);
+            // noise can't bring a shape this far out back within reach of the surface or its fillet, so it is left off
+            if (shape.NoiseAmplitude > 0f && d < shape.NoiseAmplitude + shape.Smoothness + Reach)
+                d += shape.NoiseAmplitude * Noise(p * shape.NoiseFrequency, shape.NoiseOctaves, shape.Seed);
             return d;
         }
 

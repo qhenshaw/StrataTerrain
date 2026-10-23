@@ -376,9 +376,11 @@ namespace Strata.Editor
         private static Mesh CaveMesh(StrataWorld world, int tile)
         {
             if (world.Caves == null || world.Caves[tile].Count == 0) return null;
+            // level 0 only: the coarse levels cover the same rock
             List<CombineInstance> parts = new();
             foreach (StrataCaves.Brick brick in world.Caves[tile])
-                parts.Add(new CombineInstance { mesh = brick.Mesh, transform = Matrix4x4.Translate(brick.Origin) });
+                if (brick.Level == 0)
+                    parts.Add(new CombineInstance { mesh = brick.Mesh, transform = Matrix4x4.Translate(brick.Origin) });
             Mesh mesh = new() { name = $"Strata Probe Caves {tile}", hideFlags = HideFlags.DontSave, indexFormat = IndexFormat.UInt32 };
             mesh.CombineMeshes(parts.ToArray(), true, true);
             mesh.RecalculateBounds();

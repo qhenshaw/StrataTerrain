@@ -132,6 +132,16 @@ namespace Strata.Editor
             }
 
             StrataFarFile.Write(Path.Combine(tileFolder, StrataFarFile.Name), grid, far);
+            // the coarse caves that reach the surface, for a streamed world to show beyond its resident tiles
+            string farCaves = Path.Combine(tileFolder, StrataCaves.FarName);
+            List<byte[]> farCaveTiles = new();
+            for (int tile = 0; tile < grid.TileCount; tile++) farCaveTiles.Add(StrataPreview.Caves.LastFar.GetValueOrDefault(tile));
+            if (farCaveTiles.Exists(data => data != null)) StrataCaves.WriteFar(farCaves, farCaveTiles);
+            else if (File.Exists(farCaves))
+            {
+                File.Delete(farCaves);
+                if (File.Exists(farCaves + ".meta")) File.Delete(farCaves + ".meta");
+            }
             long farBytes = new FileInfo(Path.Combine(tileFolder, StrataFarFile.Name)).Length;
             far.Dispose();
             AssetDatabase.Refresh();

@@ -58,6 +58,36 @@ namespace Strata.Editor
         private static void CreateCaveChamber(MenuCommand command) =>
             CreateFeature<CaveChamber>("Cave Chamber", command).transform.localScale = new Vector3(40f, 20f, 30f);
 
+        // rock: a tunnel that adds instead of carving, bent over the ground as an arch
+        [MenuItem("GameObject/Strata/Rock Arch", false, 31)]
+        private static void CreateRockArch(MenuCommand command)
+        {
+            GameObject go = CreateFeature<CaveTunnel>("Rock Arch", command);
+            SerializedObject feature = new(go.GetComponent<CaveTunnel>());
+            feature.FindProperty("_operation").enumValueIndex = (int)StrataCaveOperation.Add;
+            feature.FindProperty("_flatFloor").floatValue = 0f;
+            feature.FindProperty("_aspect").floatValue = 1f;
+            feature.FindProperty("_radius").floatValue = 5f;
+            feature.ApplyModifiedPropertiesWithoutUndo();
+            Spline spline = go.GetComponent<SplineContainer>().Spline;
+            spline.Clear();
+            spline.Add(new BezierKnot(new Vector3(-30f, -4f, 0f)), TangentMode.AutoSmooth);
+            spline.Add(new BezierKnot(new Vector3(0f, 22f, 0f)), TangentMode.AutoSmooth);
+            spline.Add(new BezierKnot(new Vector3(30f, -4f, 0f)), TangentMode.AutoSmooth);
+        }
+
+        // rock: a chamber that adds instead of carving, a boulder or (leaning out of a slope) an overhang
+        [MenuItem("GameObject/Strata/Rock Blob", false, 32)]
+        private static void CreateRockBlob(MenuCommand command)
+        {
+            GameObject go = CreateFeature<CaveChamber>("Rock Blob", command);
+            go.transform.localScale = new Vector3(30f, 14f, 20f);
+            SerializedObject feature = new(go.GetComponent<CaveChamber>());
+            feature.FindProperty("_operation").enumValueIndex = (int)StrataCaveOperation.Add;
+            feature.FindProperty("_flatFloor").floatValue = 0f;
+            feature.ApplyModifiedPropertiesWithoutUndo();
+        }
+
         // last, so it sees the finished heights and splats and features above it can't change it
         [MenuItem("GameObject/Strata/Tree Scatter", false, 27)]
         private static void CreateTreeScatter(MenuCommand command) => CreateFeature<TreeScatter>("Tree Scatter", command).transform.SetAsLastSibling();

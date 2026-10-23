@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.11.0
+Cave detail levels, rock and mouths.
+- Regions of caves that reach the surface (a level 2 brick, 128 cells across) are also meshed at twice and four times
+  the cell size, and each camera sees a region at one level by distance (Settings > Caves > Cave LOD Distance, level 1
+  out to 2.5 times it); a coarse level that loses much of its region's rock (thin arches) isn't used there. Coarse
+  bricks have skirts into the rock to cover cracks between levels. Caves that are all underground are drawn only within
+  Cave Underground Distance.
+- The cave data has a level and flags per brick (magic "STR2"); 0.10 data still reads. A streamed world loads
+  `caves_far.bytes` (each tile's coarsest bricks, written by the bake) and shows them for tiles that aren't resident, so
+  arches and cave mouths stay in view beyond the streaming radius. Colliders and probe proxies use level 0.
+- **Mouth Carve** on a Cave Tunnel lowers the heightfield towards the tunnel's floor over Mouth Length from each end of
+  its spline, fading inwards, so the ends open as ramps.
+- **Rock Arch** and **Rock Blob** under GameObject > Strata: a Cave Tunnel and a Cave Chamber set to Add.
+- The live preview only meshes and cuts holes again over what an edit touched (keeping the other bricks), meshes the
+  levels in parallel, and while a handle is dragged updates level 0 only, the coarse levels following when it is let
+  go. Blocks of cells far from the surface or from every shape aren't evaluated in full, primitives are culled per row
+  for ground weights, and noise is left off shapes too far away to matter; the meshes are unchanged.
+
 ## 0.10.0
 Caves, tunnels and rock.
 - **Cave Tunnel** (needs a SplineContainer: radius, height over width, flat floor, with radius and floor per point)

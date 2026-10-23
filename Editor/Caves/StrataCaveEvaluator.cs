@@ -26,6 +26,8 @@ namespace Strata.Editor
         private readonly Dictionary<StrataCaveFeature, (Texture2D Texture, RectInt Area)> _influence = new();
 
         public double LastMilliseconds { get; private set; }
+        // The last Mesh's coarsest bricks per tile (encoded, null for none), for the far caves file.
+        public Dictionary<int, byte[]> LastFar { get; } = new();
         public int LastBricks { get; private set; }
 
         public static List<StrataCaveFeature> CavesOf(List<StrataEvaluator.Node> nodes) =>
@@ -96,83 +98,101 @@ namespace Strata.Editor
             field.Primitives.Dispose();
         }
 
-        // Cuts the given tiles' holes into the heightfield and recomputes every feature's ground weight. The CPU heights
-        // must be current. Returns how many of the tiles have holes.
-        public int EvaluateSurface(StrataWorld world, List<StrataCaveFeature> caves, IEnumerable<int> tiles)
+        // Cuts the given tiles' holes into the heightfield and recomputes the features' ground weights. The CPU heights
+        // must be current. With an area (world samples), only the holes there and the weights of features over it are
+        // worked out again. Returns how many of the tiles have holes.
+        public int EvaluateSurface(StrataWorld world, List<StrataCaveFeature> caves, IEnumerable<int> tiles, RectInt? area = null)
         {
             StrataHeightfield heightfield = world.Heightfield;
             StrataGrid grid = heightfield.Grid;
+            StrataHoles holes = heightfield.Holes;
             heightfield.Readers.Complete();
             StrataCaveField field = Field(world, caves, VoxelSize(world));
 
-            // tiles no feature reaches lose their holes first, as the jobs below read the holes (through the heights)
-            List<(int Tile, RectInt Rect)> reached = new();
+            // each tile's presence, starting from what it has (over an area) or solid, and the samples to work out again;
+            // tiles with nothing to work out are set now, as the jobs below read the holes (through the heights)
+            List<(int Tile, RectInt Rect, NativeArray<byte> Presence)> work = new();
             foreach (int tile in tiles)
             {
-                RectInt rect = HoleRect(grid, field, new int2(tile % grid.TilesX, tile / grid.TilesX));
-                if (rect.width > 0 && rect.height > 0) reached.Add((tile, rect));
-                else heightfield.SetHoles(tile, default, false);
+                int2 coord = new(tile % grid.TilesX, tile / grid.TilesX);
+                RectInt rect = HoleRect(grid, field, coord);
+                if (area.HasValue)
+                {
+                    RectInt tileArea = new(coord.x * grid.Resolution, coord.y * grid.Resolution, grid.Samples, grid.Samples);
+                    rect = StrataEvaluator.Intersect(area.Value, tileArea);
+                    rect.position -= tileArea.position;
+                }
+                if (rect.width <= 0 || rect.height <= 0)
+                {
+                    if (!area.HasValue) heightfield.SetHoles(tile, default, false);
+                    continue;
+                }
+                NativeArray<byte> presence = new(grid.SamplesPerTile, Allocator.TempJob, NativeArrayOptions.UninitializedMemory);
+                int slot = holes.TileSlots[tile];
+                if (area.HasValue && slot >= 0) NativeArray<byte>.Copy(holes.Presence, slot * grid.SamplesPerTile, presence, 0, grid.SamplesPerTile);
+                else
+                    for (int i = 0; i < presence.Length; i++) presence[i] = StrataHoles.Solid;
+                work.Add((tile, rect, presence));
             }
 
-            List<(int Tile, HoleJob Job)> holes = new();
             List<JobHandle> handles = new();
-            foreach ((int tile, RectInt rect) in reached)
-            {
-                int2 coord = new(tile % grid.TilesX, tile / grid.TilesX);
-                HoleJob job = new()
+            foreach ((int tile, RectInt rect, NativeArray<byte> presence) in work)
+                handles.Add(new HoleJob
                 {
                     Field = field,
-                    Tile = coord,
+                    Tile = new int2(tile % grid.TilesX, tile / grid.TilesX),
                     Rect = new int4(rect.x, rect.y, rect.width, rect.height),
-                    Presence = new NativeArray<byte>(grid.SamplesPerTile, Allocator.TempJob),
-                    Holed = new NativeArray<int>(1, Allocator.TempJob)
-                };
-                holes.Add((tile, job));
-                handles.Add(job.Schedule());
-            }
+                    Presence = presence
+                }.Schedule(rect.height, 4));
 
-            List<(StrataCaveFeature Cave, RectInt Area, InfluenceJob Job)> influences = new();
+            List<(StrataCaveFeature Cave, RectInt Area, NativeArray<float> Influence)> influences = new();
             int shapeIndex = 0;
             foreach (StrataCaveFeature cave in caves)
             {
                 if (cave.Primitives.Count == 0) continue;
-                RectInt area = StrataEvaluator.FeatureRect(grid, cave);
+                RectInt rect = StrataEvaluator.FeatureRect(grid, cave);
                 int shape = shapeIndex++;
-                if (area.width <= 0 || area.height <= 0) continue;
-                InfluenceJob job = new()
+                if (rect.width <= 0 || rect.height <= 0) continue;
+                // over an area, a feature that doesn't reach it keeps its weights
+                if (area.HasValue && _influence.ContainsKey(cave))
+                {
+                    RectInt overlap = StrataEvaluator.Intersect(rect, area.Value);
+                    if (overlap.width <= 0 || overlap.height <= 0) continue;
+                }
+                NativeArray<float> influence = new(rect.width * rect.height, Allocator.TempJob);
+                influences.Add((cave, rect, influence));
+                handles.Add(new InfluenceJob
                 {
                     Field = field,
                     Shape = shape,
                     Reach = StrataCaveFeature.InfluenceReach * math.max(1f, math.max(cave.Paint.WidthScale, cave.Trees.WidthScale)),
-                    Rect = new int4(area.x, area.y, area.width, area.height),
-                    Influence = new NativeArray<float>(area.width * area.height, Allocator.TempJob)
-                };
-                influences.Add((cave, area, job));
-                handles.Add(job.Schedule());
+                    Rect = new int4(rect.x, rect.y, rect.width, rect.height),
+                    Influence = influence
+                }.Schedule(rect.height, 4));
             }
             NativeArray<JobHandle> all = new(handles.ToArray(), Allocator.Temp);
             JobHandle.CompleteAll(all);
             all.Dispose();
 
-            int holed = 0;
-            foreach ((int tile, HoleJob job) in holes)
+            foreach ((int tile, RectInt _, NativeArray<byte> presence) in work)
             {
-                bool any = job.Holed[0] != 0;
-                if (any) holed++;
-                heightfield.SetHoles(tile, job.Presence.Slice(), any);
-                job.Presence.Dispose();
-                job.Holed.Dispose();
+                bool any = false;
+                for (int i = 0; i < presence.Length && !any; i++) any = presence[i] < 128;
+                heightfield.SetHoles(tile, presence.Slice(), any);
+                presence.Dispose();
             }
+            int holed = 0;
+            foreach (int tile in tiles)
+                if (holes.HasHoles(tile)) holed++;
 
-            HashSet<StrataCaveFeature> seen = new();
-            foreach ((StrataCaveFeature cave, RectInt area, InfluenceJob job) in influences)
+            HashSet<StrataCaveFeature> present = new(caves);
+            foreach ((StrataCaveFeature cave, RectInt rect, NativeArray<float> influence) in influences)
             {
-                seen.Add(cave);
                 if (!_influence.TryGetValue(cave, out (Texture2D Texture, RectInt Area) entry) || entry.Texture == null ||
-                    entry.Texture.width != area.width || entry.Texture.height != area.height)
+                    entry.Texture.width != rect.width || entry.Texture.height != rect.height)
                 {
                     if (entry.Texture != null) UnityEngine.Object.DestroyImmediate(entry.Texture);
-                    entry.Texture = new Texture2D(area.width, area.height, GraphicsFormat.R32_SFloat, TextureCreationFlags.DontInitializePixels)
+                    entry.Texture = new Texture2D(rect.width, rect.height, GraphicsFormat.R32_SFloat, TextureCreationFlags.DontInitializePixels)
                     {
                         name = $"Strata Cave Influence {cave.name}",
                         hideFlags = HideFlags.HideAndDontSave,
@@ -180,13 +200,13 @@ namespace Strata.Editor
                         wrapMode = TextureWrapMode.Clamp
                     };
                 }
-                entry.Texture.SetPixelData(job.Influence, 0);
+                entry.Texture.SetPixelData(influence, 0);
                 entry.Texture.Apply(false, false);
-                entry.Area = area;
+                entry.Area = rect;
                 _influence[cave] = entry;
-                job.Influence.Dispose();
+                influence.Dispose();
             }
-            foreach (StrataCaveFeature gone in _influence.Keys.Where(cave => !seen.Contains(cave)).ToList())
+            foreach (StrataCaveFeature gone in _influence.Keys.Where(cave => !present.Contains(cave)).ToList())
             {
                 if (_influence[gone].Texture != null) UnityEngine.Object.DestroyImmediate(_influence[gone].Texture);
                 _influence.Remove(gone);
@@ -213,27 +233,139 @@ namespace Strata.Editor
             return math.any(first > last) ? default : new RectInt(first.x, first.y, last.x - first.x + 1, last.y - first.y + 1);
         }
 
+        // One meshed brick, kept so the preview only meshes the bricks an edit reaches again.
+        private sealed class Meshed
+        {
+            public StrataCaveData.Vertex[] Vertices;
+            public ushort[] Indices;
+            public bool Exposed;
+            public float Area;
+            public int Flags;
+        }
+
+        private readonly Dictionary<(int Level, int3 Coord), Meshed> _bricks = new();
+        private StrataWorld _bricksWorld;
+        private float _bricksVoxel;
+
+        // Forgets the meshed bricks, so the next Mesh meshes everything it is asked for.
+        public void ClearBricks() => _bricks.Clear();
+
         // Meshes the caves of the given tiles, shows them in the world, and returns each tile's encoded cave data (null
-        // for a tile without caves).
-        public Dictionary<int, byte[]> Mesh(StrataWorld world, List<StrataCaveFeature> caves, IEnumerable<int> tiles)
+        // for a tile without caves). With an area (world samples), only bricks over it are meshed again; the rest come
+        // from the previous call's results; fineOnly leaves the coarse levels as they were (while an edit is dragged).
+        public Dictionary<int, byte[]> Mesh(StrataWorld world, List<StrataCaveFeature> caves, IEnumerable<int> tiles, RectInt? area = null,
+                                            bool fineOnly = false)
         {
             Stopwatch watch = Stopwatch.StartNew();
             StrataHeightfield heightfield = world.Heightfield;
             StrataGrid grid = heightfield.Grid;
             heightfield.Readers.Complete();
             float voxel = VoxelSize(world);
+            if (_bricksWorld != world || _bricksVoxel != voxel || area == null) _bricks.Clear();
+            _bricksWorld = world;
+            _bricksVoxel = voxel;
             StrataCaveField field = Field(world, caves, voxel);
+            field.Reach = Reach(grid, StrataCaveData.CellSize(voxel, StrataCaveData.Levels - 1));
             HashSet<int> wanted = new(tiles);
             float3 lattice = StrataCaveData.LatticeOrigin(grid);
-            float brickSize = StrataCaveData.BrickCells * voxel;
-            int maxY = (int)math.ceil(grid.HeightRange / brickSize) - 1;
+            Rect dirty = area.HasValue ? new Rect(grid.SamplePosition(new int2(area.Value.xMin, area.Value.yMin)),
+                                                  (float2)new int2(area.Value.width, area.Value.height) * grid.Spacing) : default;
 
-            // the bricks any feature's box (and the rim around it) reaches, in the wanted tiles, in lattice order
-            SortedSet<int3> bricks = new(Comparer<int3>.Create((a, b) => a.y != b.y ? a.y.CompareTo(b.y) : a.z != b.z ? a.z.CompareTo(b.z) : a.x.CompareTo(b.x)));
+            // level 0: the bricks any feature's box (and the rim around it) reaches, in the wanted tiles, in lattice order
+            List<int3> fine = Active(grid, field, voxel, 0, wanted, Reach(grid, voxel));
+            MeshLevels(field, lattice, voxel, new() { (0, fine) }, area.HasValue, dirty, grid);
+
+            // the coarse levels, only for regions with a level 0 brick near the ground's surface
+            SortedSet<int3> regions = new(LatticeOrder);
+            foreach (int3 coord in fine)
+                if (_bricks.TryGetValue((0, coord), out Meshed brick) && brick.Exposed) regions.Add(StrataCaveData.Region(coord, 0));
+            if (!fineOnly)
+            {
+                List<(int Level, List<int3> Coords)> coarse = new();
+                for (int level = 1; level < StrataCaveData.Levels; level++)
+                {
+                    List<int3> coords = new();
+                    int side = 1 << level;
+                    foreach (int3 region in regions)
+                    for (int y = 0; y < StrataCaveData.RegionBricks / side; y++)
+                    for (int z = 0; z < StrataCaveData.RegionBricks / side; z++)
+                    for (int x = 0; x < StrataCaveData.RegionBricks / side; x++)
+                        coords.Add(region * (StrataCaveData.RegionBricks / side) + new int3(x, y, z));
+                    coords.Sort(LatticeOrder);
+                    coarse.Add((level, coords));
+                }
+                MeshLevels(field, lattice, voxel, coarse, area.HasValue, dirty, grid);
+                Forget(grid, voxel, wanted, fine, regions);
+            }
+            else Forget(grid, voxel, wanted, fine, null);
+            if (!fineOnly) MarkUnfaithful(regions);
+
+            Dictionary<int, List<StrataCaveData.Source>> perTile = new();
+            Dictionary<int, List<StrataCaveData.Source>> farTile = new();
+            List<NativeArray<StrataCaveData.Vertex>> vertexArrays = new();
+            List<NativeArray<ushort>> indexArrays = new();
+            int meshed = 0;
+            for (int level = 0; level < StrataCaveData.Levels; level++)
+            {
+                List<int3> coords = new();
+                foreach ((int l, int3 coord) in _bricks.Keys)
+                    if (l == level) coords.Add(coord);
+                coords.Sort(LatticeOrder);
+                foreach (int3 coord in coords)
+                {
+                    Meshed brick = _bricks[(level, coord)];
+                    int tile = StrataCaveData.BrickTile(grid, voxel, coord, level);
+                    if (brick.Indices.Length == 0 || !wanted.Contains(tile)) continue;
+                    if (!perTile.TryGetValue(tile, out List<StrataCaveData.Source> list)) perTile[tile] = list = new();
+                    NativeArray<StrataCaveData.Vertex> vertices = new(brick.Vertices, Allocator.Temp);
+                    NativeArray<ushort> indices = new(brick.Indices, Allocator.Temp);
+                    vertexArrays.Add(vertices);
+                    indexArrays.Add(indices);
+                    StrataCaveData.Source source = new() { Coord = coord, Level = level, Flags = brick.Flags, Vertices = vertices, Indices = indices };
+                    list.Add(source);
+                    if (level == StrataCaveData.Levels - 1)
+                    {
+                        if (!farTile.TryGetValue(tile, out List<StrataCaveData.Source> far)) farTile[tile] = far = new();
+                        far.Add(source);
+                    }
+                    meshed++;
+                }
+            }
+
+            Dictionary<int, byte[]> result = new();
+            LastFar.Clear();
+            foreach (int tile in wanted)
+            {
+                LastFar[tile] = farTile.TryGetValue(tile, out List<StrataCaveData.Source> far) ? StrataCaveData.Encode(voxel, far) : null;
+                byte[] data = perTile.TryGetValue(tile, out List<StrataCaveData.Source> list) ? StrataCaveData.Encode(voxel, list) : null;
+                result[tile] = data;
+                if (world.Caves == null) continue;
+                NativeArray<byte> bytes = data != null ? new NativeArray<byte>(data, Allocator.TempJob) : new NativeArray<byte>(0, Allocator.TempJob);
+                world.Caves.SetTile(tile, bytes);
+                bytes.Dispose();
+            }
+            foreach (NativeArray<StrataCaveData.Vertex> array in vertexArrays) array.Dispose();
+            foreach (NativeArray<ushort> array in indexArrays) array.Dispose();
+            Dispose(field);
+            LastBricks = meshed;
+            LastMilliseconds = watch.Elapsed.TotalMilliseconds;
+            return result;
+        }
+
+        private static readonly Comparer<int3> LatticeOrder =
+            Comparer<int3>.Create((a, b) => a.y != b.y ? a.y.CompareTo(b.y) : a.z != b.z ? a.z.CompareTo(b.z) : a.x.CompareTo(b.x));
+
+        // The bricks of a level that any feature's box (grown by the rim) reaches, in the wanted tiles, in lattice order.
+        private static List<int3> Active(StrataGrid grid, StrataCaveField field, float voxel, int level, HashSet<int> wanted, float reach)
+        {
+            float3 lattice = StrataCaveData.LatticeOrigin(grid);
+            float size = StrataCaveData.BrickCells * StrataCaveData.CellSize(voxel, level);
+            int maxY = (int)math.ceil(grid.HeightRange / size) - 1;
+            SortedSet<int3> bricks = new(LatticeOrder);
             foreach (StrataCaveShape shape in field.Shapes)
             {
-                int3 first = (int3)math.floor((shape.Min - field.Reach - lattice) / brickSize);
-                int3 last = (int3)math.floor((shape.Max + field.Reach - lattice) / brickSize);
+                int3 first = (int3)math.floor((shape.Min - reach - lattice) / size);
+                int3 last = (int3)math.floor((shape.Max + reach - lattice) / size);
                 first.y = math.max(first.y, 0);
                 last.y = math.min(last.y, maxY);
                 for (int y = first.y; y <= last.y; y++)
@@ -241,63 +373,106 @@ namespace Strata.Editor
                 for (int x = first.x; x <= last.x; x++)
                 {
                     int3 coord = new(x, y, z);
-                    int tile = StrataCaveData.BrickTile(grid, voxel, coord);
+                    int tile = StrataCaveData.BrickTile(grid, voxel, coord, level);
                     if (tile >= 0 && wanted.Contains(tile)) bricks.Add(coord);
                 }
             }
+            return new List<int3>(bricks);
+        }
 
-            List<BrickJob> jobs = new();
-            NativeArray<JobHandle> handles = new(bricks.Count, Allocator.Temp);
-            foreach (int3 coord in bricks)
+        // Meshes the given bricks of some levels in parallel (with an area, only those over it or not meshed yet) into the
+        // brick cache.
+        private void MeshLevels(StrataCaveField field, float3 lattice, float voxel, List<(int Level, List<int3> Coords)> levels, bool partial,
+                                Rect area, StrataGrid grid)
+        {
+            List<(int Level, int3 Coord, BrickJob Job)> jobs = new();
+            List<JobHandle> handles = new();
+            foreach ((int level, List<int3> coords) in levels)
+            foreach (int3 coord in coords)
             {
+                float cell = StrataCaveData.CellSize(voxel, level);
+                float size = StrataCaveData.BrickCells * cell;
+                if (partial && _bricks.ContainsKey((level, coord)))
+                {
+                    float3 corner = StrataCaveData.BrickOrigin(grid, voxel, coord, level);
+                    // a cell of margin: the brick's vertices reach a cell beyond it
+                    if (!new Rect(corner.x - cell, corner.z - cell, size + cell * 2f, size + cell * 2f).Overlaps(area)) continue;
+                }
+                // primitives only matter within this level's reach
+                StrataCaveField levelField = field;
+                levelField.Reach = Reach(grid, cell);
                 BrickJob job = new()
                 {
-                    Field = field,
+                    Field = levelField,
                     Coord = coord,
-                    Voxel = voxel,
+                    Level = level,
+                    Voxel = cell,
                     Lattice = lattice,
-                    SnapDepth = SnapDepth,
+                    Reach = Reach(grid, cell),
+                    SnapDepth = SnapDepth * (1 << level),
                     BlendDepth = BlendDepth,
                     Vertices = new NativeList<StrataCaveData.Vertex>(0, Allocator.TempJob),
-                    Indices = new NativeList<ushort>(0, Allocator.TempJob)
+                    Indices = new NativeList<ushort>(0, Allocator.TempJob),
+                    Stats = new NativeArray<float>(2, Allocator.TempJob)
                 };
-                handles[jobs.Count] = job.Schedule();
-                jobs.Add(job);
+                jobs.Add((level, coord, job));
+                handles.Add(job.Schedule());
             }
-            JobHandle.CompleteAll(handles);
-            handles.Dispose();
-
-            Dictionary<int, List<(int3, NativeArray<StrataCaveData.Vertex>, NativeArray<ushort>)>> perTile = new();
-            foreach (BrickJob job in jobs)
+            NativeArray<JobHandle> all = new(handles.ToArray(), Allocator.Temp);
+            JobHandle.CompleteAll(all);
+            all.Dispose();
+            foreach ((int level, int3 coord, BrickJob job) in jobs)
             {
-                if (job.Indices.Length == 0) continue;
-                int tile = StrataCaveData.BrickTile(grid, voxel, job.Coord);
-                if (!perTile.TryGetValue(tile, out var list)) perTile[tile] = list = new();
-                list.Add((job.Coord, job.Vertices.AsArray(), job.Indices.AsArray()));
-            }
-
-            Dictionary<int, byte[]> result = new();
-            int meshed = 0;
-            foreach (int tile in wanted)
-            {
-                byte[] data = perTile.TryGetValue(tile, out var list) ? StrataCaveData.Encode(voxel, list) : null;
-                meshed += list?.Count ?? 0;
-                result[tile] = data;
-                if (world.Caves == null) continue;
-                NativeArray<byte> bytes = data != null ? new NativeArray<byte>(data, Allocator.TempJob) : new NativeArray<byte>(0, Allocator.TempJob);
-                world.Caves.SetTile(tile, bytes);
-                bytes.Dispose();
-            }
-
-            foreach (BrickJob job in jobs)
-            {
+                bool exposed = job.Stats[0] > 0f;
+                _bricks[(level, coord)] = new Meshed
+                {
+                    Vertices = job.Vertices.AsArray().ToArray(),
+                    Indices = job.Indices.AsArray().ToArray(),
+                    Exposed = exposed,
+                    Area = job.Stats[1],
+                    Flags = level == 0 && exposed ? StrataCaveData.Exposed : 0
+                };
                 job.Vertices.Dispose();
                 job.Indices.Dispose();
+                job.Stats.Dispose();
             }
-            Dispose(field);
-            LastBricks = meshed;
-            LastMilliseconds = watch.Elapsed.TotalMilliseconds;
-            return result;
+        }
+
+        // Drops cached bricks the features no longer reach (or whose region no longer reaches the surface) in the wanted
+        // tiles.
+        private void Forget(StrataGrid grid, float voxel, HashSet<int> wanted, List<int3> fine, SortedSet<int3> regions)
+        {
+            HashSet<int3> active = new(fine);
+            List<(int, int3)> gone = new();
+            foreach ((int level, int3 coord) in _bricks.Keys)
+            {
+                if (!wanted.Contains(StrataCaveData.BrickTile(grid, voxel, coord, level))) continue;
+                // without regions (only level 0 was meshed), coarse bricks stay as they were
+                bool keep = level == 0 ? active.Contains(coord) : regions == null || regions.Contains(StrataCaveData.Region(coord, level));
+                if (!keep) gone.Add((level, coord));
+            }
+            foreach ((int, int3) key in gone) _bricks.Remove(key);
+        }
+
+        // Flags a region's coarse bricks when they keep much less of its features' surface than its level 0 bricks (thin
+        // rock that vanishes at a coarse cell size), so the renderer keeps a finer level there.
+        private void MarkUnfaithful(SortedSet<int3> regions)
+        {
+            Dictionary<int3, float3> areas = new();
+            foreach (((int level, int3 coord), Meshed brick) in _bricks)
+            {
+                int3 region = StrataCaveData.Region(coord, level);
+                if (!regions.Contains(region)) continue;
+                areas.TryGetValue(region, out float3 sum);
+                sum[level] += brick.Area;
+                areas[region] = sum;
+            }
+            foreach (((int level, int3 coord), Meshed brick) in _bricks)
+            {
+                if (level == 0 || !areas.TryGetValue(StrataCaveData.Region(coord, level), out float3 sum)) continue;
+                bool lost = sum.x > 1f && sum[level] < sum.x * 0.7f;
+                brick.Flags = lost ? StrataCaveData.Unfaithful : 0;
+            }
         }
 
         // A tile's holes as its file stores them: the rectangle of its samples that aren't plainly solid, and their

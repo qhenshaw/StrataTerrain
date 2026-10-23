@@ -157,6 +157,7 @@ namespace Strata
             }
             Renderer = new StrataTerrainRenderer(Heightfield, material, _settings.LodDistanceRatio) { CastShadows = _castShadows, Layer = gameObject.layer };
             BuildCaves(material, baked && !stream);
+            if (stream) Caves?.LoadFar(_data.FarCavesPath);
             if (_material == null) DestroyImmediate(material);
             RebuildPalette();
             SetStrataDefinitions(baked ? _data.Strata : Array.Empty<StrataBandDefinition>());
@@ -345,6 +346,12 @@ namespace Strata
                 world.Renderer?.Rebind();
                 if (world._caveInstance != null && world.Renderer != null)
                     StrataMaterialBinding.Bind(world._caveInstance, world.Heightfield, world.Splatmap, world.PaletteTextures, world.Renderer.Bands, world.Renderer.Lod);
+                if (world.Caves != null)
+                {
+                    world.Caves.LodDistance = world._settings.CaveLodDistance;
+                    world.Caves.UndergroundDistance = world._settings.CaveUndergroundDistance;
+                    world.Caves.Select(camera.transform.position);
+                }
                 if (world.TreeRenderer == null) continue;
                 world.TreeRenderer.DistanceScale = world._settings.TreeDistanceScale;
                 world.TreeRenderer.Refresh();

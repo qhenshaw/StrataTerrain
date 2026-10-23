@@ -72,6 +72,11 @@ namespace Strata
                  "128-cell blocks. Shapes need to be about four cells across to stay round.")]
         [SerializeField, Min(0.25f)] private float _caveVoxelSize = 1f;
         [SerializeField] private bool _caveShadows = true;
+        [Tooltip("Caves that reach the surface show full detail within this distance, then coarser (half detail out to 2.5 " +
+                 "times it, then quarter), in metres.")]
+        [SerializeField, Min(8f)] private float _caveLodDistance = 64f;
+        [Tooltip("Caves that are all underground are drawn within this distance, in metres.")]
+        [SerializeField, Min(16f)] private float _caveUndergroundDistance = 200f;
 
         [Header("Probes")]
         [Tooltip("The closest baked light probes get (near the terrain and trees), in metres; the farthest is 27 times this. " +
@@ -108,6 +113,8 @@ namespace Strata
         public float ProbeMinSpacing => _probeMinSpacing;
         public float CaveVoxelSize => _caveVoxelSize;
         public bool CaveShadows => _caveShadows;
+        public float CaveLodDistance => _caveLodDistance;
+        public float CaveUndergroundDistance => _caveUndergroundDistance;
 
         // Clamps the settings to what the world can use; called by the StrataWorld when it is edited.
         public void Validate()

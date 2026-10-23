@@ -8,7 +8,7 @@ using UnityEngine;
 namespace Strata
 {
     // Collision for the caves inside each active collision chunk: when the terrain's collision activates a chunk, every
-    // cave brick whose footprint meets it gets a pooled MeshCollider of its mesh (baked for PhysX in parallel), on the
+    // level 0 cave brick whose footprint meets it gets a pooled MeshCollider of its mesh (baked for PhysX in parallel), on the
     // collision layer under one root, so physics and NavMesh building see caves with the ground; a brick's collider goes
     // back to the pool once no active chunk needs it. A tile's caves changing rebuilds the colliders over it.
     public sealed class StrataCaveColliders : IDisposable
@@ -128,6 +128,7 @@ namespace Strata
                 if (onlyTile >= 0 && tile != onlyTile) continue;
                 foreach (StrataCaves.Brick brick in _caves[tile])
                 {
+                    if (brick.Level != 0) continue;
                     float2 corner = new(brick.Origin.x, brick.Origin.z);
                     if (math.all(corner < max) && math.all(corner + size > min)) _scratch.Add((brick, tile));
                 }
