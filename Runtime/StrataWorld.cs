@@ -9,9 +9,11 @@ namespace Strata
     // layers it paints with, and what the last bake produced. It owns the heightfield, trees and grass densities (loaded
     // from the baked data, or flat and bare until the first bake), draws them with a StrataTerrainRenderer, a
     // StrataTreeRenderer and a StrataGrassRenderer (which generates grass on the GPU per camera) in edit and play mode,
-    // and its baked caves with StrataCaves and their formations with StrataFormations, and in play mode streams terrain, tree trunk and cave collision around the
-    // registered focus transforms and StrataFocus components. Authoring features (stamps, splines, filters, caves) live
-    // under this object in the hierarchy; the editor evaluates them for the live preview and the bake.
+    // and its baked caves with StrataCaves and their formations with StrataFormations, and in play mode streams terrain,
+    // tree trunk and cave collision around the registered focus transforms and StrataFocus components. It keeps the baked
+    // biome maps (StrataBiomeMap) on the CPU for StrataGround.TryGetBiome. Authoring features (stamps, splines, filters,
+    // caves, biome areas) live under this object in the hierarchy; the editor evaluates them for the live preview and the
+    // bake.
     [ExecuteAlways, DisallowMultipleComponent]
     public class StrataWorld : MonoBehaviour
     {
@@ -51,6 +53,8 @@ namespace Strata
         public StrataWorldData Data => _data;
         public StrataHeightfield Heightfield { get; private set; }
         public StrataSplatmap Splatmap { get; private set; }
+        // The surface and underground biome maps, on the CPU, for queries and the editor's evaluators.
+        public StrataBiomeMap Biomes { get; private set; }
         public StrataPaletteTextures PaletteTextures { get; private set; }
         public StrataTerrainRenderer Renderer { get; private set; }
         public StrataCollision Collision { get; private set; }
@@ -145,16 +149,20 @@ namespace Strata
             int holeSlots = stream ? Math.Clamp(_data.HoledTiles, 1, _settings.ResidentTiles) : 0;
             Heightfield = new StrataHeightfield(_settings.Grid, stream ? _settings.ResidentTiles : 0, holeSlots);
             Splatmap = new StrataSplatmap(_settings.Grid, Heightfield.SlotCount);
+            Biomes = new StrataBiomeMap(_settings.Grid, Heightfield.SlotCount);
+            BiomeAreas = baked ? _data.Biomes : Array.Empty<StrataBiomeArea>();
             if (stream)
             {
                 using StrataFarFile.Data far = StrataFarFile.Read(_data.FarPath, _settings.Grid, Unity.Collections.Allocator.Temp);
                 Heightfield.LoadFar(far);
                 Splatmap.LoadFar(far);
+                Biomes.LoadFar(far);
             }
             else if (baked)
             {
                 Heightfield.Load(_data);
                 Splatmap.Load(_data);
+                Biomes.Load(_data);
             }
             Renderer = new StrataTerrainRenderer(Heightfield, material, _settings.LodDistanceRatio) { CastShadows = _castShadows, Layer = gameObject.layer };
             BuildCaves(material, baked && !stream);
@@ -185,7 +193,7 @@ namespace Strata
                 if (baked && !stream) Grass.Load(_data);
             }
             if (stream)
-                Streamer = new StrataStreamer(_data, Heightfield, Splatmap, Grass, Trees, Caves, Formations, _settings.StreamingRadius,
+                Streamer = new StrataStreamer(_data, Heightfield, Splatmap, Biomes, Grass, Trees, Caves, Formations, _settings.StreamingRadius,
                                               _settings.CollisionRadius + _settings.CollisionChunkSize, _settings.MaxConcurrentLoads);
             if (Application.isPlaying)
             {
@@ -223,6 +231,11 @@ namespace Strata
         // The formation prototypes the formation records refer to (from the bake, or set live by the editor preview);
         // every tile's formations are cleared.
         public void SetFormationPrototypes(IReadOnlyList<StrataFormationPrototype> prototypes) => Formations?.SetPrototypes(prototypes);
+
+        // The biome areas the biome maps refer to by index (from the bake, or set live by the editor preview).
+        public IReadOnlyList<StrataBiomeArea> BiomeAreas { get; private set; } = Array.Empty<StrataBiomeArea>();
+
+        public void SetBiomeAreas(IReadOnlyList<StrataBiomeArea> areas) => BiomeAreas = areas ?? Array.Empty<StrataBiomeArea>();
 
         // The rock strata definitions the strata map refers to (from the bake, or set live by the editor preview).
         public IReadOnlyList<StrataBandDefinition> StrataDefinitions { get; private set; } = Array.Empty<StrataBandDefinition>();
@@ -303,6 +316,7 @@ namespace Strata
             Renderer?.Dispose();
             PaletteTextures?.Dispose();
             Splatmap?.Dispose();
+            Biomes?.Dispose();
             Heightfield?.Dispose();
             CaveColliders = null;
             TreeColliders = null;
@@ -318,6 +332,8 @@ namespace Strata
             Renderer = null;
             PaletteTextures = null;
             Splatmap = null;
+            Biomes = null;
+            BiomeAreas = Array.Empty<StrataBiomeArea>();
             Heightfield = null;
         }
 

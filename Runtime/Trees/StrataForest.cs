@@ -42,7 +42,7 @@ namespace Strata
         public bool Avoid;
     }
 
-    // A biome of trees: where it grows (height, slope, moisture, the terrain layers under it, and noise for clearings),
+    // A forest: where it grows (height, slope, moisture, the terrain layers and biomes under it, and noise for clearings),
     // how densely, and which species it mixes. It is a block on a Tree Scatter, which places it over the world or a
     // footprint; several Tree Scatters (forests) can share a world. Density is the fraction of full stocking: 1 packs
     // each species as closely as its spacing allows.
@@ -56,6 +56,8 @@ namespace Strata
         [Tooltip("Layer weight at which a grow-on layer allows full density, or an avoided layer removes it.")]
         [SerializeField, Range(0.05f, 1f)] private float _layerSensitivity = 0.5f;
         [SerializeField] private List<StrataForestLayer> _layers = new();
+        [Tooltip("The surface biomes the forest grows in.")]
+        [SerializeField] private StrataBiomeFilter _biomes;
         [Tooltip("Wavelength of the noise that breaks the forest into stands and clearings, in metres.")]
         [SerializeField, Min(1f)] private float _noiseScale = 120f;
         [SerializeField, Range(0f, 1f)] private float _noiseAmount = 0.5f;
@@ -75,6 +77,7 @@ namespace Strata
         public StrataRange Moisture => _moisture;
         public float LayerSensitivity => _layerSensitivity;
         public IReadOnlyList<StrataForestLayer> Layers => _layers;
+        public StrataBiomeFilter Biomes => _biomes;
         public float NoiseScale => _noiseScale;
         public float NoiseAmount => _noiseAmount;
         public int Seed => _seed;
@@ -103,7 +106,7 @@ namespace Strata
             {
                 int hash = HashCode.Combine(_density, _height, _slope, _moisture, _layerSensitivity, _noiseScale, _noiseAmount, _seed);
                 foreach (StrataForestLayer layer in _layers) hash = HashCode.Combine(hash, layer.Layer, layer.Avoid);
-                return hash;
+                return HashCode.Combine(hash, _biomes.Hash);
             }
         }
 
@@ -118,6 +121,12 @@ namespace Strata
             _noiseScale = noiseScale;
             _noiseAmount = noiseAmount;
             _species = new List<StrataTreeSpecies>(species);
+            _version++;
+        }
+
+        public void SetBiomes(StrataBiomeFilter biomes)
+        {
+            _biomes = biomes;
             _version++;
         }
 

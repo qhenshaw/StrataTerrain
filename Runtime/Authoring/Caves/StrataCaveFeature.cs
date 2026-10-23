@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using Unity.Mathematics;
 using UnityEngine;
@@ -8,8 +9,17 @@ namespace Strata
     // in a signed distance field that starts as the heightfield's ground, applied in hierarchy order with smooth unions so
     // they fillet into the ground and each other. The bake meshes the field near these features into cave meshes, and
     // cuts holes in the heightfield where a carve opens it, so the terrain shows the cave beneath. Walls and floors take
-    // the chosen palette layers (blending into the ground's own layers near the surface), and the feature's paint and
+    // the chosen palette layers (the first biome layer for the underground biome there, else the default; blending into
+    // the ground's own layers near the surface), and the feature's paint and
     // tree effect act on the ground around entrances and under rock (by default clearing trees and grass there).
+    // A palette layer a cave's walls or floors take in some underground biomes (any biome with none listed).
+    [Serializable]
+    public struct StrataCaveBiomeLayer
+    {
+        public StrataLayer Layer;
+        public List<StrataBiomeArea> Biomes;
+    }
+
     public abstract class StrataCaveFeature : StrataFeature
     {
         // how far the paint and tree effect reach beyond the shape at the ground, in metres (times their width scale)
@@ -19,10 +29,14 @@ namespace Strata
         [Tooltip("Fillet radius where the shape meets the ground and the features above it, in metres.")]
         [SerializeField, Min(0f)] protected float _smoothness = 2f;
         [SerializeField] protected StrataCaveNoise _noise = StrataCaveNoise.Default;
-        [Tooltip("Palette layer for walls and ceilings; none shows the ground's layers.")]
+        [Tooltip("Default palette layer for walls and ceilings; none shows the ground's layers.")]
         [SerializeField] protected StrataLayer _wallLayer;
-        [Tooltip("Palette layer for floors; none uses the wall layer.")]
+        [Tooltip("Default palette layer for floors; none uses the wall layer.")]
         [SerializeField] protected StrataLayer _floorLayer;
+        [Tooltip("Wall layers for underground biomes, the first that matches first, before the default.")]
+        [SerializeField] protected List<StrataCaveBiomeLayer> _wallLayers = new();
+        [Tooltip("Floor layers for underground biomes, the first that matches first, before the default.")]
+        [SerializeField] protected List<StrataCaveBiomeLayer> _floorLayers = new();
         [Tooltip("Surfaces facing up at less than this slope are floor, in degrees.")]
         [SerializeField, Range(0f, 90f)] protected float _floorSlope = 35f;
         [SerializeField] protected StrataPaint _paint = StrataPaint.Default;
@@ -48,6 +62,9 @@ namespace Strata
         public StrataCaveNoise Noise => _noise;
         public StrataLayer WallLayer => _wallLayer;
         public StrataLayer FloorLayer => _floorLayer != null ? _floorLayer : _wallLayer;
+        public bool HasFloorLayer => _floorLayer != null;
+        public IReadOnlyList<StrataCaveBiomeLayer> WallLayers => _wallLayers;
+        public IReadOnlyList<StrataCaveBiomeLayer> FloorLayers => _floorLayers;
         public float FloorSlope => _floorSlope;
         public override StrataPaint Paint => _paint;
         public override StrataTreeEffect Trees => _trees;

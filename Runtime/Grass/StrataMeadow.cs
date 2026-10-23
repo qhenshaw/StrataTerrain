@@ -15,7 +15,7 @@ namespace Strata
         public StrataRange Moisture = new(0f, 1f, 0.2f);
     }
 
-    // A ground cover of grass and details: where it grows (height, slope, moisture, terrain layers, noise), how densely
+    // A ground cover of grass and details: where it grows (height, slope, moisture, terrain layers, biomes, noise), how densely
     // (fraction of each prototype's full density), and which prototypes it mixes. It is a block on a Grass Scatter,
     // which places it.
     [Serializable]
@@ -28,6 +28,8 @@ namespace Strata
         [Tooltip("Layer weight at which a grow-on layer allows full density, or an avoided layer removes it.")]
         [SerializeField, Range(0.05f, 1f)] private float _layerSensitivity = 0.5f;
         [SerializeField] private List<StrataForestLayer> _layers = new();
+        [Tooltip("The surface biomes the meadow grows in.")]
+        [SerializeField] private StrataBiomeFilter _biomes;
         [Tooltip("Wavelength of the noise that patches the meadow, in metres.")]
         [SerializeField, Min(1f)] private float _noiseScale = 30f;
         [SerializeField, Range(0f, 1f)] private float _noiseAmount = 0.3f;
@@ -40,6 +42,7 @@ namespace Strata
         public StrataRange Moisture => _moisture;
         public float LayerSensitivity => _layerSensitivity;
         public IReadOnlyList<StrataForestLayer> Layers => _layers;
+        public StrataBiomeFilter Biomes => _biomes;
         public float NoiseScale => _noiseScale;
         public float NoiseAmount => _noiseAmount;
         public int Seed => _seed;
@@ -50,7 +53,7 @@ namespace Strata
         {
             get
             {
-                int version = _version * 7919;
+                int version = _version * 7919 + _biomes.Hash;
                 foreach (StrataMeadowEntry entry in _entries)
                     version = version * 31 + (entry?.Prototype != null ? entry.Prototype.Version + entry.Prototype.GetHashCode() : 0);
                 return version;
@@ -68,6 +71,12 @@ namespace Strata
             _noiseScale = noiseScale;
             _noiseAmount = noiseAmount;
             _entries = new List<StrataMeadowEntry>(entries);
+            _version++;
+        }
+
+        public void SetBiomes(StrataBiomeFilter biomes)
+        {
+            _biomes = biomes;
             _version++;
         }
 

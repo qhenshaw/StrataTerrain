@@ -4,7 +4,8 @@
 // merging with a slot that already holds it or replacing the weakest slot. The moisture kernels build a coarse
 // world-wide map (flow accumulation and distance to water) that the rules sample. The tree kernels run per tile after
 // the splats: each forest's density at splat resolution, from its rule over the finished heights, moisture and splats,
-// then scaled by the tree effects of the features below it.
+// then scaled by the tree effects of the features below it. Layer rules, forests and meadows are gated by the tile's
+// surface biome map: each has a gate of 1 or 0 per biome index, blended by the two strongest biomes' weights.
 #pragma kernel MoistureHeights
 #pragma kernel FlowReceivers
 #pragma kernel FlowStep
@@ -279,6 +280,33 @@ void SplatInit(uint3 id : SV_DispatchThreadID)
     _SplatWeight[id.xy] = float4(1, 0, 0, 0);
 }
 
+// Biomes: the tile's surface biome map (the two strongest biome indices / 255 and their weights, which add up to 1),
+// and gates of 1 or 0 per biome index (255 none): StrataBiomeMap.Indices per palette layer, and the current forest's
+// or meadow's. With no biomes the gates are skipped, so worlds without them paint exactly as before.
+Texture2D<float4> _BiomeTile;
+StructuredBuffer<float> _LayerBiomeGate;
+StructuredBuffer<float> _ForestBiomeGate;
+int _BiomeGateOn;
+
+// lerped rather than summed, so a gate that is the same for both biomes passes through exactly
+float LayerBiomeGate(int2 texel, int layer)
+{
+    if (_BiomeGateOn == 0) return 1.0;
+    float4 biome = _BiomeTile[texel];
+    int2 i = (int2)round(biome.xy * 255.0);
+    float second = _LayerBiomeGate[layer * 256 + i.y];
+    return second + (_LayerBiomeGate[layer * 256 + i.x] - second) * biome.z;
+}
+
+float ForestBiomeGate(int2 texel)
+{
+    if (_BiomeGateOn == 0) return 1.0;
+    float4 biome = _BiomeTile[texel];
+    int2 i = (int2)round(biome.xy * 255.0);
+    float second = _ForestBiomeGate[i.y];
+    return second + (_ForestBiomeGate[i.x] - second) * biome.z;
+}
+
 // 6 float4s per layer: (enabled, opacity, 1 / noise scale, noise amount), height, slope, curvature, moisture ranges
 StructuredBuffer<float4> _Rules;
 int _LayerCount;
@@ -310,6 +338,7 @@ void SplatRules(uint3 id : SV_DispatchThreadID)
             float n = SplatNoise(p * head.z + layer * 17.3) * 0.65 + SplatNoise(p * head.z * 2.7 + layer * 5.1) * 0.35;
             weight = saturate(weight + (n - 0.5) * 2.0 * head.w);
         }
+        weight *= LayerBiomeGate((int2)id.xy, layer);
         PaintSlots(index, slots, layer, weight);
     }
     _SplatIndex[id.xy] = index;
@@ -431,7 +460,7 @@ float ForestDensity(float2 p, int2 texel)
 {
     float height = HeightAt(p);
     float density = _Forest.x * RangeWeight(_ForestHeight, height) * RangeWeight(_ForestSlope, SlopeAt(p, _Grid.z)) *
-                    RangeWeight(_ForestMoisture, MoistureAt(p));
+                    RangeWeight(_ForestMoisture, MoistureAt(p)) * ForestBiomeGate(texel);
     if (density <= 0.0) return 0.0;
     float grow = 0.0, avoid = 0.0;
     bool anyGrow = false;

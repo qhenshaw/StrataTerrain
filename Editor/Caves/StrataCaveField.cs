@@ -9,7 +9,8 @@ namespace Strata.Editor
     // smooth minimum with the shape, so features fillet into the ground and each other. A feature's own distance is the
     // minimum over its primitives (tapered elliptical tubes and ellipsoids) plus world-anchored value noise. Everything
     // is evaluated at world positions computed the same way wherever they are shared, so neighbouring bricks and tiles
-    // get bit-identical values and the meshes meet exactly.
+    // get bit-identical values and the meshes meet exactly. Shapes with biome layer options pick their wall and floor
+    // layers from the underground biome map, dithering between the two strongest biomes where they blend.
     public struct StrataCaveField
     {
         public const float Far = 1e6f;
@@ -17,6 +18,8 @@ namespace Strata.Editor
         public StrataHeights Heights;
         [ReadOnly] public NativeArray<StrataCaveShape> Shapes;
         [ReadOnly] public NativeArray<StrataCavePrimitive> Primitives;
+        [ReadOnly] public NativeArray<StrataCaveLayerOption> LayerOptions;
+        public StrataBiomeMap.View Biomes;
         // how far beyond a shape something still needs its distance (the mesh's rim around features), in metres
         public float Reach;
 
@@ -39,6 +42,27 @@ namespace Strata.Editor
                 Shapes.Dispose();
                 Indices.Dispose();
             }
+        }
+
+        // The underground biome at a point: one of the two strongest there, picked by a hash of the point (in quarter
+        // metres) with odds by their weights, so a blend between biomes becomes a speckled mix of their layers.
+        public int UndergroundBiome(float3 p)
+        {
+            if (!Biomes.IsCreated) return StrataBiomeMap.None;
+            uint texel = Biomes.Sample(p.xz, true);
+            uint roll = math.hash((uint3)(int3)math.round(p * 4f)) & 0xffu;
+            return (int)(roll < ((texel >> 16) & 0xff) ? texel & 0xff : (texel >> 8) & 0xff);
+        }
+
+        // The first of count options from first whose biomes hold the biome, else the fallback.
+        public int PickLayer(int first, int count, int biome, int fallback)
+        {
+            for (int i = first; i < first + count; i++)
+            {
+                StrataCaveLayerOption option = LayerOptions[i];
+                if (StrataBiomeFilter.MaskAllows(option.MaskLow, option.MaskHigh, biome)) return option.Layer;
+            }
+            return fallback;
         }
 
         public float Pad(StrataCaveShape shape) => shape.Smoothness + shape.NoiseAmplitude + Reach;

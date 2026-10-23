@@ -8,8 +8,8 @@ namespace Strata
     // What a bake produced, as a block on the StrataWorld that Bake fills in: the grid the tiles were baked with, the
     // folder under StreamingAssets holding one .bytes file per tile (heights, splats, trees, grass, and any cave holes
     // and meshes) and the far files (the whole world coarsely, every CDLOD node's height bounds, and the coarse caves that
-    // reach the surface), the definitions and
-    // prototypes the files refer to by index, and the cave voxel size and how many tiles have holes. The files stay out of the asset database so a streaming world can read just the tiles it needs.
+    // reach the surface), the definitions,
+    // prototypes and biome areas the files refer to by index, and the cave voxel size and how many tiles have holes. The files stay out of the asset database so a streaming world can read just the tiles it needs.
     [Serializable]
     public class StrataWorldData
     {
@@ -20,6 +20,7 @@ namespace Strata
         [SerializeField] private StrataTreePrototype[] _treePrototypes = new StrataTreePrototype[0];
         [SerializeField] private StrataGrassPrototype[] _grassPrototypes = new StrataGrassPrototype[0];
         [SerializeField] private StrataFormationPrototype[] _formationPrototypes = new StrataFormationPrototype[0];
+        [SerializeField] private StrataBiomeArea[] _biomes = new StrataBiomeArea[0];
         [SerializeField] private float _caveVoxelSize;
         [SerializeField] private int _holedTiles;
 
@@ -33,6 +34,8 @@ namespace Strata
         public StrataGrassPrototype[] GrassPrototypes => _grassPrototypes ?? new StrataGrassPrototype[0];
         // The formation prototypes the tiles' formation records refer to by index.
         public StrataFormationPrototype[] FormationPrototypes => _formationPrototypes ?? new StrataFormationPrototype[0];
+        // The biome areas the tiles' biome maps refer to by index.
+        public StrataBiomeArea[] Biomes => _biomes ?? new StrataBiomeArea[0];
         public float CaveVoxelSize => _caveVoxelSize;
         // How many tiles have holes cut by caves, which sizes a streamed world's hole slots.
         public int HoledTiles => _holedTiles;
@@ -48,8 +51,9 @@ namespace Strata
         public NativeArray<byte> ReadTile(int tile, Allocator allocator) => new(File.ReadAllBytes(TilePath(tile)), allocator);
 
         public void Set(StrataGrid grid, string folder, StrataBandDefinition[] strata, StrataTreePrototype[] treePrototypes,
-                        StrataGrassPrototype[] grassPrototypes, float caveVoxelSize, int holedTiles, StrataFormationPrototype[] formationPrototypes)
+                        StrataGrassPrototype[] grassPrototypes, float caveVoxelSize, int holedTiles, StrataFormationPrototype[] formationPrototypes, StrataBiomeArea[] biomes)
         {
+            _biomes = biomes;
             _formationPrototypes = formationPrototypes;
             _caveVoxelSize = caveVoxelSize;
             _holedTiles = holedTiles;

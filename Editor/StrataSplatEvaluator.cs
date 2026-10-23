@@ -15,7 +15,9 @@ namespace Strata.Editor
     // the heights, and distance to water below sea level or under River splines) rebuilt by UpdateMoisture. Each tile
     // also gets its rock strata map: the strongest Rock Strata over each texel and its strength. Given a tree context, it
     // then works out each forest's density over the tile (Tree Scatters and tree effects in hierarchy order) and starts
-    // reading it back, with moisture, for StrataTreeEvaluator to place trees from.
+    // reading it back, with moisture, for StrataTreeEvaluator to place trees from. Layer rules, forests and meadows are
+    // limited to their biomes by the tile's surface biome map (StrataBiomeEvaluator paints it first), uploaded per tile
+    // with a gate per palette layer and one for the forest or meadow being scattered.
     public sealed class StrataSplatEvaluator : IDisposable
     {
         private const string ShaderPath = "Packages/com.qhenshaw.terrain/Editor/Compute/StrataSplat.compute";
@@ -49,6 +51,11 @@ namespace Strata.Editor
         private RenderTexture _index;
         private RenderTexture _weight;
         private RenderTexture _rock;
+        private Texture2D _biomeTile;
+        private ComputeBuffer _layerGate;
+        private readonly ComputeBuffer _forestGate = new(StrataBiomeMap.Indices, 4);
+        private readonly float[] _forestGateData = new float[StrataBiomeMap.Indices];
+        private IReadOnlyList<StrataBiomeArea> _biomes = Array.Empty<StrataBiomeArea>();
         private readonly RenderTexture _dummyMoisture;
         private readonly RenderTexture _dummyDelta;
         private readonly Dictionary<StrataWorld, Moisture> _moisture = new();
@@ -66,6 +73,9 @@ namespace Strata.Editor
             _profile.Release();
             _paintCurve.Release();
             _dummyBuffer.Release();
+            _layerGate?.Release();
+            _forestGate.Release();
+            if (_biomeTile != null) UnityEngine.Object.DestroyImmediate(_biomeTile);
             _rules?.Release();
             _riverPoints?.Release();
             _forestLayers?.Release();
@@ -213,6 +223,8 @@ namespace Strata.Editor
             StrataPalette palette = world.Palette;
             int layerCount = palette != null ? palette.Layers.Count : 0;
             EnsureTargets(grid);
+            _biomes = world.BiomeAreas;
+            _shader.SetInt("_BiomeGateOn", _biomes.Count > 0 ? 1 : 0);
             UploadRules(palette);
 
             SetHeights(world);
@@ -240,6 +252,7 @@ namespace Strata.Editor
             {
                 int tx = tile % grid.TilesX, tz = tile / grid.TilesX;
                 _shader.SetInts("_SplatTile", tile, tx, tz, grid.SplatResolution);
+                UploadBiomes(world, tile);
                 Bind(init);
                 Dispatch(init, size);
 
@@ -339,7 +352,7 @@ namespace Strata.Editor
                     SetScatter(grassScatter, feature, grassFeature.EdgeFalloff, grassFeature.FalloffCurve);
                     StrataMeadow meadow = grassFeature.Meadow;
                     SetRule(grassScatter, meadow.Density, meadow.Height, meadow.Slope, meadow.Moisture, meadow.Layers, meadow.LayerSensitivity,
-                            meadow.NoiseScale, meadow.NoiseAmount, meadow.Seed);
+                            meadow.NoiseScale, meadow.NoiseAmount, meadow.Seed, meadow.Biomes);
                     _shader.SetBuffer(grassScatter, "_GrassEntries", _grassEntries);
                     _shader.SetTexture(grassScatter, "_GrassState", _grassState);
                     _shader.SetVector("_TreeEffect", new Vector4(1f, grassFeature.Replace ? 1f : 0f, 0f, 0f));
@@ -421,12 +434,14 @@ namespace Strata.Editor
 
         private void SetForest(int kernel, StrataForest forest) =>
             SetRule(kernel, forest.Density, forest.Height, forest.Slope, forest.Moisture, forest.Layers, forest.LayerSensitivity,
-                    forest.NoiseScale, forest.NoiseAmount, forest.Seed);
+                    forest.NoiseScale, forest.NoiseAmount, forest.Seed, forest.Biomes);
 
         // The forest (or meadow) rule FeatureInfluence and the scatter kernels read, and the moisture it samples.
         private void SetRule(int kernel, float density, StrataRange height, StrataRange slope, StrataRange moisture, IReadOnlyList<StrataForestLayer> ruleLayers,
-                             float sensitivity, float noiseScale, float noiseAmount, int seed)
+                             float sensitivity, float noiseScale, float noiseAmount, int seed, StrataBiomeFilter biomes)
         {
+            biomes.FillGate(_forestGateData, 0, _biomes);
+            _forestGate.SetData(_forestGateData);
             _shader.SetVector("_Forest", new Vector4(density, 1f / math.max(noiseScale, 1f), noiseAmount, seed));
             _shader.SetVector("_ForestHeight", height.Packed);
             _shader.SetVector("_ForestSlope", slope.Packed);
@@ -613,6 +628,36 @@ namespace Strata.Editor
                 _rules = new ComputeBuffer(math.ceilpow2(data.Length), 16);
             }
             _rules.SetData(data);
+
+            // each layer's biome gate, StrataBiomeMap.Indices per layer
+            float[] gates = new float[count * StrataBiomeMap.Indices];
+            for (int i = 0; i < count; i++)
+            {
+                StrataLayer layer = palette != null && i < palette.Layers.Count ? palette.Layers[i] : null;
+                (layer != null ? palette.FilterFor(layer) : default).FillGate(gates, i * StrataBiomeMap.Indices, _biomes);
+            }
+            if (_layerGate == null || _layerGate.count < gates.Length)
+            {
+                _layerGate?.Release();
+                _layerGate = new ComputeBuffer(math.ceilpow2(gates.Length), 4);
+            }
+            _layerGate.SetData(gates);
+        }
+
+        // The tile's surface biome map, as the kernels read it.
+        private void UploadBiomes(StrataWorld world, int tile)
+        {
+            StrataGrid grid = world.Heightfield.Grid;
+            if (_biomeTile == null || _biomeTile.width != grid.SplatSamples)
+            {
+                if (_biomeTile != null) UnityEngine.Object.DestroyImmediate(_biomeTile);
+                _biomeTile = new Texture2D(grid.SplatSamples, grid.SplatSamples, GraphicsFormat.R8G8B8A8_UNorm, TextureCreationFlags.DontInitializePixels)
+                    { filterMode = FilterMode.Point, wrapMode = TextureWrapMode.Clamp, hideFlags = HideFlags.HideAndDontSave };
+            }
+            int slot = world.Heightfield.SlotOf(tile);
+            if (world.Biomes == null || slot < 0) return;
+            _biomeTile.SetPixelData(world.Biomes.CpuSurface, 0, slot * grid.SplatSamplesPerTile);
+            _biomeTile.Apply(false, false);
         }
 
         private void SetHeights(StrataWorld world)
@@ -629,6 +674,9 @@ namespace Strata.Editor
         {
             _shader.SetTexture(kernel, "_SplatIndex", _index);
             _shader.SetTexture(kernel, "_SplatWeight", _weight);
+            _shader.SetTexture(kernel, "_BiomeTile", _biomeTile);
+            _shader.SetBuffer(kernel, "_LayerBiomeGate", _layerGate);
+            _shader.SetBuffer(kernel, "_ForestBiomeGate", _forestGate);
         }
 
         private void EnsureTargets(StrataGrid grid)
