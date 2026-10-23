@@ -63,6 +63,7 @@ namespace Strata
         // Patches (each 2048 triangles) the last camera view drew.
         public int LastVisiblePatches { get; private set; }
         public int Layer { get; set; }
+        public uint RenderingLayers { get; set; } = 1;
         public Material Material => _material;
         public GraphicsBuffer Bands => _bands;
         // _StrataLod: leaf range, morph start, tiles z, detail range
@@ -251,7 +252,8 @@ namespace Strata
                 Mesh = _meshId,
                 Material = _materialId,
                 HoleMaterial = _holeMaterialId,
-                Layer = (byte)Layer
+                Layer = (byte)Layer,
+                RenderingLayers = RenderingLayers
             }.Schedule(_heights.Readers);
             // Culled inline rather than handing the job back: in the first frames after a group is created, a returned
             // job could run after Unity had released this view's output (Burst null references while rebuilding).
@@ -287,6 +289,7 @@ namespace Strata
             public BatchMaterialID Material;
             public BatchMaterialID HoleMaterial;
             public byte Layer;
+            public uint RenderingLayers;
 
             public void Execute()
             {
@@ -379,7 +382,7 @@ namespace Strata
                 Output->drawRangeCount = commandCount > 0 ? 1 : 0;
                 BatchFilterSettings filter = new()
                 {
-                    renderingLayerMask = 1,
+                    renderingLayerMask = RenderingLayers,
                     layer = Layer,
                     motionMode = MotionVectorGenerationMode.Camera,
                     shadowCastingMode = ShadowCastingMode.On,

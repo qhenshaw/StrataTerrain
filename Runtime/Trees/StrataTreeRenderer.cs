@@ -51,6 +51,7 @@ namespace Strata
             // the first slot whose shadow is drawn by the impostor
             public int ShadowImpostorFrom;
             public float MaxEnd;
+            public uint RenderingLayers;
         }
 
         // the draws for one prototype slot (a mesh LOD or the impostor): its submeshes in Submeshes
@@ -159,7 +160,8 @@ namespace Strata
                     ShadowImpostorFrom = prototype.HasImpostor && prototype.ImpostorShadows
                         ? math.max(1, prototype.LodCount - prototype.ImpostorShadowLods)
                         : prototype.LodCount,
-                    MaxEnd = prototype.MaxDistance
+                    MaxEnd = prototype.MaxDistance,
+                    RenderingLayers = prototype.RenderingLayers
                 };
                 for (int l = 0; l < prototype.LodCount; l++)
                 {
@@ -373,6 +375,7 @@ namespace Strata
                 BucketCount = _prototypes.Length * SlotCount * (shadow ? 1 << splits : 1),
                 MaskCount = shadow ? 1 << splits : 1,
                 Shadow = shadow,
+                Prototypes = _prototypes,
                 Slots = _slots,
                 Submeshes = _submeshes,
                 Output = commands,
@@ -528,6 +531,7 @@ namespace Strata
             public int BucketCount;
             public int MaskCount;
             public bool Shadow;
+            [ReadOnly] public NativeArray<PrototypeCull> Prototypes;
             [ReadOnly] public NativeArray<SlotDraws> Slots;
             [ReadOnly] public NativeArray<SubmeshDraw> Submeshes;
             [NativeDisableUnsafePtrRestriction] public BatchCullingOutputDrawCommands* Output;
@@ -558,11 +562,20 @@ namespace Strata
 
                 Output->visibleInstances = Malloc<int>(math.max(1, total));
                 Output->drawCommands = Malloc<BatchDrawCommand>(math.max(1, commandCount));
-                Output->drawRanges = Malloc<BatchDrawRange>(1);
-                int command = 0;
+                // buckets run prototype by prototype, so a draw range is a run of prototypes on the same rendering layers
+                Output->drawRanges = Malloc<BatchDrawRange>(math.max(1, commandCount));
+                int command = 0, ranges = 0, rangeBegin = 0;
+                uint rangeLayers = 0;
                 for (int b = 0; b < BucketCount; b++)
                 {
                     if (counts[b] == 0) continue;
+                    uint layers = Prototypes[b / MaskCount / SlotCount].RenderingLayers;
+                    if (command > rangeBegin && layers != rangeLayers)
+                    {
+                        Output->drawRanges[ranges++] = Range(rangeBegin, command, rangeLayers);
+                        rangeBegin = command;
+                    }
+                    rangeLayers = layers;
                     SlotDraws draws = Slots[b / MaskCount];
                     for (int s = draws.First; s < draws.First + draws.Count; s++)
                     {
@@ -599,24 +612,26 @@ namespace Strata
                     Items.EndForEachIndex();
                 }
 
+                if (command > rangeBegin) Output->drawRanges[ranges++] = Range(rangeBegin, command, rangeLayers);
                 Output->drawCommandCount = command;
                 Output->visibleInstanceCount = total;
-                Output->drawRangeCount = command > 0 ? 1 : 0;
-                Output->drawRanges[0] = new BatchDrawRange
-                {
-                    drawCommandsType = BatchDrawCommandType.Direct,
-                    drawCommandsBegin = 0,
-                    drawCommandsCount = (uint)command,
-                    filterSettings = new BatchFilterSettings
-                    {
-                        renderingLayerMask = 1,
-                        layer = Layer,
-                        motionMode = MotionVectorGenerationMode.Camera,
-                        shadowCastingMode = ShadowCastingMode.On,
-                        receiveShadows = true
-                    }
-                };
+                Output->drawRangeCount = ranges;
             }
+
+            private BatchDrawRange Range(int begin, int end, uint renderingLayers) => new()
+            {
+                drawCommandsType = BatchDrawCommandType.Direct,
+                drawCommandsBegin = (uint)begin,
+                drawCommandsCount = (uint)(end - begin),
+                filterSettings = new BatchFilterSettings
+                {
+                    renderingLayerMask = renderingLayers,
+                    layer = Layer,
+                    motionMode = MotionVectorGenerationMode.Camera,
+                    shadowCastingMode = ShadowCastingMode.On,
+                    receiveShadows = true
+                }
+            };
 
             private static T* Malloc<T>(int count) where T : unmanaged =>
                 (T*)UnsafeUtility.Malloc(UnsafeUtility.SizeOf<T>() * count, UnsafeUtility.AlignOf<T>(), Allocator.TempJob);

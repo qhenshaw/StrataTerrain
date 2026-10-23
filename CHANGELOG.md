@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.14.0
+- Rendering layers: the world's Settings have Terrain Rendering Layers and Cave Rendering Layers, and tree and
+  formation prototypes a Rendering Layers mask, so light layers and screen-space effects that mask by rendering layers
+  (in the GBuffer) can tell them apart. Each defaults to Default only, as before. The tree renderer draws one range per
+  run of prototypes on the same layers.
+
 ## 0.13.0
 Biomes.
 - The **Biome Area** feature (GameObject > Strata > Biome Area, or Biome Area (Whole World)) names a region of the

@@ -164,7 +164,8 @@ namespace Strata
                 Splatmap.Load(_data);
                 Biomes.Load(_data);
             }
-            Renderer = new StrataTerrainRenderer(Heightfield, material, _settings.LodDistanceRatio) { CastShadows = _castShadows, Layer = gameObject.layer };
+            Renderer = new StrataTerrainRenderer(Heightfield, material, _settings.LodDistanceRatio)
+                { CastShadows = _castShadows, Layer = gameObject.layer, RenderingLayers = _settings.TerrainRenderingLayers };
             BuildCaves(material, baked && !stream);
             Formations = new StrataFormations(_settings.Grid) { Layer = gameObject.layer, CastShadows = _castShadows && _settings.CaveShadows };
             Formations.SetPrototypes(baked ? _data.FormationPrototypes : Array.Empty<StrataFormationPrototype>());
@@ -218,7 +219,8 @@ namespace Strata
             _caveInstance.name = "Strata Caves";
             _caveInstance.hideFlags = HideFlags.HideAndDontSave;
             StrataMaterialBinding.CopyLook(terrain, _caveInstance);
-            Caves = new StrataCaves(_settings.Grid, transform, _caveInstance, gameObject.layer, _castShadows && _settings.CaveShadows);
+            Caves = new StrataCaves(_settings.Grid, transform, _caveInstance, gameObject.layer, _castShadows && _settings.CaveShadows)
+                { RenderingLayers = _settings.CaveRenderingLayers };
             if (!load) return;
             for (int tile = 0; tile < _settings.Grid.TileCount; tile++)
             {
@@ -376,11 +378,13 @@ namespace Strata
             foreach (StrataWorld world in s_active)
             {
                 world.Renderer?.Rebind();
+                if (world.Renderer != null) world.Renderer.RenderingLayers = world._settings.TerrainRenderingLayers;
                 if (world._caveInstance != null && world.Renderer != null)
                     StrataMaterialBinding.Bind(world._caveInstance, world.Heightfield, world.Splatmap, world.PaletteTextures, world.Renderer.Bands, world.Renderer.Lod);
                 if (world.Caves != null)
                 {
                     world.Caves.LodDistance = world._settings.CaveLodDistance;
+                    world.Caves.RenderingLayers = world._settings.CaveRenderingLayers;
                     world.Caves.UndergroundDistance = world._settings.CaveUndergroundDistance;
                     world.Caves.Select(camera.transform.position);
                 }
