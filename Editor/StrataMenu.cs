@@ -4,8 +4,8 @@ using UnityEngine.Splines;
 
 namespace Strata.Editor
 {
-    // GameObject > Strata menu items: a world, and each kind of feature (caves included), created under the selected
-    // world (or the selected feature's world) at the scene view's focus point.
+    // GameObject > Strata menu items: a world, and each kind of feature (caves and biomes included), created under the
+    // selected world (or the selected feature's world) at the scene view's focus point.
     public static class StrataMenu
     {
         [MenuItem("GameObject/Strata/World", false, 10)]
@@ -90,6 +90,25 @@ namespace Strata.Editor
 
         [MenuItem("GameObject/Strata/Cave Formations", false, 33)]
         private static void CreateCaveFormations(MenuCommand command) => CreateFeature<CaveFormations>("Cave Formations", command);
+
+        // a closed blob of an outline around the scene view's focus point
+        [MenuItem("GameObject/Strata/Biome Area", false, 34)]
+        private static void CreateBiomeArea(MenuCommand command)
+        {
+            GameObject go = CreateFeature<StrataBiomeArea>("Biome Area", command);
+            Spline spline = go.AddComponent<SplineContainer>().Spline;
+            spline.Clear();
+            spline.Add(new BezierKnot(new Vector3(-40f, 0f, 0f)), TangentMode.AutoSmooth);
+            spline.Add(new BezierKnot(new Vector3(0f, 0f, 40f)), TangentMode.AutoSmooth);
+            spline.Add(new BezierKnot(new Vector3(40f, 0f, 0f)), TangentMode.AutoSmooth);
+            spline.Add(new BezierKnot(new Vector3(0f, 0f, -40f)), TangentMode.AutoSmooth);
+            spline.Closed = true;
+        }
+
+        // first, so the areas below it paint over it
+        [MenuItem("GameObject/Strata/Biome Area (Whole World)", false, 35)]
+        private static void CreateWorldBiome(MenuCommand command) =>
+            CreateFeature<StrataBiomeArea>("Default Biome", command).transform.SetAsFirstSibling();
 
         // last, so it sees the finished heights and splats and features above it can't change it
         [MenuItem("GameObject/Strata/Tree Scatter", false, 27)]

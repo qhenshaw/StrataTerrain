@@ -4,8 +4,8 @@ using UnityEngine;
 namespace Strata
 {
     // Ground queries against whichever active Strata world covers a position, for spawning and gameplay code: the height
-    // and normal (full resolution where the tile is resident, else the far copy) and the strongest terrain layer (from
-    // the baked splats: the tile's where resident, else the far splats). Each returns false outside every world, and the
+    // and normal (full resolution where the tile is resident, else the far copy), the strongest terrain layer (from
+    // the baked splats: the tile's where resident, else the far splats) and the strongest biome (likewise). Each returns false outside every world, and the
     // heightfield ones also where a cave has cut a hole in the terrain, which has no heightfield ground (the height is
     // still given). TryGetGround in play mode raycasts against the world's collision first, so it finds cave floors
     // too. Code that can be underground (in a cave) should use physics, and IsUnderground to tell.
@@ -116,6 +116,31 @@ namespace Strata
             layer = world.Palette.Layers[layerIndex];
             weight = ((weights >> (best * 8)) & 0xff) / 255f;
             return true;
+        }
+
+        // The strongest biome at a position and its weight (nearest biome texel of the bake): the underground map's when
+        // the position is below the surface, else the surface map's. Holes don't stop it, so a cave mouth has a biome.
+        public static bool TryGetBiome(Vector3 position, out StrataBiomeArea biome, out float weight) =>
+            TryGetBiome(position, IsUnderground(position), out biome, out weight);
+
+        public static bool TryGetBiome(Vector3 position, bool underground, out StrataBiomeArea biome, out float weight)
+        {
+            biome = null;
+            weight = 0f;
+            if (!TryGetBiomeIndex(position, underground, out StrataWorld world, out int index, out weight)) return false;
+            biome = world.BiomeAreas[index];
+            return biome != null;
+        }
+
+        // The strongest biome's index in its world's biome list; false for none.
+        public static bool TryGetBiomeIndex(Vector3 position, bool underground, out StrataWorld world, out int index, out float weight)
+        {
+            index = StrataBiomeMap.None;
+            weight = 0f;
+            if (!TryGetWorld(position, out world) || world.Biomes == null || world.BiomeAreas.Count == 0) return false;
+            uint texel = world.Biomes.GetView(world.Heightfield.TileSlots).Sample(new float2(position.x, position.z), underground);
+            index = StrataBiomeMap.Strongest(texel, out weight);
+            return index < world.BiomeAreas.Count;
         }
     }
 }

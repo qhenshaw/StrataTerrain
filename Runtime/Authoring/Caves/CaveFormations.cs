@@ -5,14 +5,16 @@ using UnityEngine;
 
 namespace Strata
 {
-    // One kind of formation in a Cave Formations feature: its prototype and how many grow per 100 square metres of the
-    // surface it grows on.
+    // One kind of formation in a Cave Formations feature: its prototype, how many grow per 100 square metres of the
+    // surface it grows on, and the underground biomes it grows in.
     [Serializable]
     public struct StrataFormationEntry
     {
         public StrataFormationPrototype Prototype;
         [Tooltip("Formations per 100 square metres of its surface (floor, ceiling or wall).")]
         [Min(0f)] public float Density;
+        [Tooltip("The underground biomes it grows in.")]
+        public StrataBiomeFilter Biomes;
     }
 
     // Scatters cave formations (stalactites, stalagmites, crystals) over the cave surfaces inside this object's box

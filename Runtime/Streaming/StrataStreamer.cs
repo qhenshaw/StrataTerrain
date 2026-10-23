@@ -11,7 +11,7 @@ namespace Strata
     // Keeps the tiles near the streaming centres (cameras and collision foci) resident in a streamed world. Each update
     // it ranks tiles by their distance from the nearest centre: tiles beyond the radius plus a margin give up their slot,
     // and tiles within the radius that aren't resident are read from their files with AsyncReadManager, nearest first, a
-    // few at a time. A finished read puts the tile's heights, holes, splats, strata, grass and caves in a free slot (taking the
+    // few at a time. A finished read puts the tile's heights, holes, splats, strata, biomes, grass and caves in a free slot (taking the
     // farthest resident tile's if none is free) and re-seats its trees on the full heights, a couple of tiles per update
     // so loading doesn't hitch. Tiles within the immediate radius (collision) are read straight away when first wanted.
     public sealed unsafe class StrataStreamer : IDisposable
@@ -27,6 +27,7 @@ namespace Strata
         private readonly StrataWorldData _data;
         private readonly StrataHeightfield _heights;
         private readonly StrataSplatmap _splats;
+        private readonly StrataBiomeMap _biomes;
         private readonly StrataGrassMap _grass;
         private readonly StrataTrees _trees;
         private readonly StrataCaves _caves;
@@ -47,7 +48,7 @@ namespace Strata
         // A tile became resident (after its data was installed).
         public event Action<int> TileLoaded;
 
-        public StrataStreamer(StrataWorldData data, StrataHeightfield heights, StrataSplatmap splats, StrataGrassMap grass, StrataTrees trees,
+        public StrataStreamer(StrataWorldData data, StrataHeightfield heights, StrataSplatmap splats, StrataBiomeMap biomes, StrataGrassMap grass, StrataTrees trees,
                               StrataCaves caves, StrataFormations formations, float radius, float immediateRadius, int maxLoads)
         {
             _caves = caves;
@@ -55,6 +56,7 @@ namespace Strata
             _data = data;
             _heights = heights;
             _splats = splats;
+            _biomes = biomes;
             _grass = grass;
             _trees = trees;
             _radius = radius;
@@ -156,6 +158,7 @@ namespace Strata
             samples.Dispose();
             _heights.SetHoles(tile, file, grid.SplatSamples);
             _splats.SetTile(tile, slot, file, _data.Strata);
+            _biomes?.SetTile(slot, file);
             _grass?.SetTile(slot, file);
             _trees.RebuildTile(tile);
             _caves?.SetTile(tile, file, grid.SplatSamples);

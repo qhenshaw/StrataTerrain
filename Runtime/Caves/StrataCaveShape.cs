@@ -48,9 +48,19 @@ namespace Strata
         public float3 Max;
     }
 
+    // A palette layer a cave's walls or floors can take, and the underground biomes it is for (a 256-bit mask over the
+    // world's biome indices, as StrataBiomeFilter.Mask makes).
+    public struct StrataCaveLayerOption
+    {
+        public int Layer;
+        public uint4 MaskLow;
+        public uint4 MaskHigh;
+    }
+
     // A cave feature as the field evaluator uses it: how it combines with what is above it, its noise, its primitives
     // (First, Count), its box grown by everything that can reach outside the primitives, and the palette layers its
-    // walls and floors take (-1 to show the ground's own layers).
+    // walls and floors take (-1 to show the ground's own layers): its biome options (WallOptions, then FloorOptions,
+    // from FirstOption in the field's options), else the defaults.
     public struct StrataCaveShape
     {
         public StrataCaveOperation Operation;
@@ -65,6 +75,11 @@ namespace Strata
         public float3 Max;
         public int WallLayer;
         public int FloorLayer;
+        // whether the feature chose a floor layer (else floors take the wall layer chosen for the biome)
+        public bool ExplicitFloor;
+        public int FirstOption;
+        public int WallOptions;
+        public int FloorOptions;
         // cosine of the steepest slope still counted as floor
         public float FloorCos;
     }

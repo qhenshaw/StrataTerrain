@@ -45,14 +45,19 @@ Non-destructive tiled terrain for Unity 6 URP (PC, DX12/Vulkan).
   for the whole world, so arches are seen from afar); Mouth Carve ramps the ground into a tunnel's ends; **Rock Arch**
   and **Rock Blob** are the same features adding rock. **Cave Formations** scatters `StrataFormationPrototype` meshes
   (stalactites, stalagmites, crystals) over the cave floors, ceilings and walls inside its box, drawn instanced.
+- Biomes: **Biome Area** features (a colour, Surface or Underground, closed spline outlines with an edge falloff and
+  noise; no outline for the whole world) paint a surface and an underground biome map in hierarchy order. The
+  palette's Biome Masks, forests, meadows, cave wall and floor layers and cave formations can be limited to biomes,
+  and the maps are baked with the tiles for gameplay queries.
 - Edits preview live in the editor; **Bake** writes one compact `.bytes` file per tile (heights, splats, trees,
-  grass densities, and any cave holes and meshes) and a far file to `StreamingAssets/Strata/<world>/`, and records them in the world's Baked Data
+  grass densities, biome maps, and any cave holes and meshes) and a far file to `StreamingAssets/Strata/<world>/`, and records them in the world's Baked Data
   (save the scene afterwards).
 - Streaming (play mode): tiles near cameras and focus transforms are loaded asynchronously into a fixed number of
   slots; everything else is drawn from the resident far copy (heights every 8 m, splats every 8 m at the default
   spacing). Trees are all resident (16 bytes each on the GPU); grass and collision exist only on resident tiles.
-- `StrataGround` answers height, normal and terrain-layer queries for gameplay code; they fail over cave holes, and
-  `IsHole` and `IsUnderground` tell when a position is over one or in a cave.
+- `StrataGround` answers height, normal, terrain-layer and biome queries for gameplay code; the ground ones fail over
+  cave holes, and `IsHole` and `IsUnderground` tell when a position is over one or in a cave (`TryGetBiome` then uses
+  the underground map).
 - The surface, caves, trees and grass render forward or, under deferred rendering, into the GBuffer (leaves keep their
   translucency there, added to the lighting buffer).
 - The surface, trees and grass are drawn through `BatchRendererGroup`: GPU-displaced CDLOD patches, and trees with

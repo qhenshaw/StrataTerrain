@@ -10,7 +10,8 @@ namespace Strata.Editor
     // Places cave formations on the level 0 cave meshes. Each triangle of a cave's own surface (not the ground around its
     // mouths) is floor, ceiling or wall by its normal; for every Cave Formations box holding its centre, each entry for
     // that surface expects area times density formations there, the count and spots drawn from hashes of the triangle's
-    // quantised centre, so every bake places the same formations whichever brick or tile the triangle is meshed in.
+    // quantised centre, so every bake places the same formations whichever brick or tile the triangle is meshed in. An
+    // entry limited to underground biomes expects that many times its biome filter there.
     public static class StrataFormationPlacer
     {
         public struct Box
@@ -32,6 +33,10 @@ namespace Strata.Editor
             public float MaxScale;
             // metres the base sinks at scale 1
             public float Sink;
+            // the underground biomes it grows in (a 256-bit mask), unless Any
+            public bool Filtered;
+            public uint4 MaskLow;
+            public uint4 MaskHigh;
         }
 
         public struct Placed
@@ -51,6 +56,7 @@ namespace Strata.Editor
             public float Cell;
             [ReadOnly] public NativeArray<Box> Boxes;
             [ReadOnly] public NativeArray<Entry> Entries;
+            public StrataBiomeMap.View Biomes;
             public NativeList<Placed> Output;
 
             public void Execute()
@@ -79,6 +85,7 @@ namespace Strata.Editor
                             if (entry.Surface != surface || entry.Density <= 0f) continue;
                             uint seed = math.hash(new uint4(key, box.Seed ^ ((uint)e * 0x9e3779b9u)));
                             float expected = area * entry.Density;
+                            if (entry.Filtered) expected *= Gate(entry, centre);
                             int count = (int)expected + (Unit(seed, 0) < expected - (int)expected ? 1 : 0);
                             for (int k = 0; k < count; k++)
                             {
@@ -99,6 +106,17 @@ namespace Strata.Editor
                         }
                     }
                 }
+            }
+
+            // the entry's biome filter at a point, blended by the two strongest underground biomes there
+            private float Gate(Entry entry, float3 p)
+            {
+                if (!Biomes.IsCreated) return 0f;
+                uint texel = Biomes.Sample(p.xz, true);
+                float w0 = ((texel >> 16) & 0xff) / 255f;
+                float g0 = StrataBiomeFilter.MaskAllows(entry.MaskLow, entry.MaskHigh, (int)(texel & 0xff)) ? 1f : 0f;
+                float g1 = StrataBiomeFilter.MaskAllows(entry.MaskLow, entry.MaskHigh, (int)((texel >> 8) & 0xff)) ? 1f : 0f;
+                return g1 + (g0 - g1) * w0;
             }
 
             private static bool Cave(StrataCaveData.Vertex v) => (v.Surface & 0xff) != StrataCaveData.NoLayer && (v.Surface >> 24) < 128;
@@ -125,7 +143,8 @@ namespace Strata.Editor
         }
 
         // The features' boxes and entries for the job, against the given prototype list.
-        public static void Inputs(IEnumerable<CaveFormations> formations, List<StrataFormationPrototype> prototypes, out NativeArray<Box> boxes, out NativeArray<Entry> entries)
+        public static void Inputs(IEnumerable<CaveFormations> formations, List<StrataFormationPrototype> prototypes, IReadOnlyList<StrataBiomeArea> biomes,
+                                  out NativeArray<Box> boxes, out NativeArray<Entry> entries)
         {
             List<Box> boxList = new();
             List<Entry> entryList = new();
@@ -137,6 +156,7 @@ namespace Strata.Editor
                     int index = entry.Prototype != null ? prototypes.IndexOf(entry.Prototype) : -1;
                     if (index < 0) continue;
                     StrataFormationPrototype prototype = entry.Prototype;
+                    entry.Biomes.Mask(biomes, out uint4 low, out uint4 high);
                     entryList.Add(new Entry
                     {
                         Prototype = index,
@@ -145,7 +165,10 @@ namespace Strata.Editor
                         Align = prototype.Surface == StrataFormationSurface.Wall ? 1f : prototype.Align,
                         MinScale = prototype.MinScale,
                         MaxScale = prototype.MaxScale,
-                        Sink = prototype.Sink * prototype.Mesh.bounds.max.y
+                        Sink = prototype.Sink * prototype.Mesh.bounds.max.y,
+                        Filtered = !entry.Biomes.IsAny,
+                        MaskLow = low,
+                        MaskHigh = high
                     });
                 }
                 if (entryList.Count > first)

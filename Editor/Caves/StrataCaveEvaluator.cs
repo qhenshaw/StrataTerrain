@@ -58,6 +58,7 @@ namespace Strata.Editor
         {
             List<StrataCaveShape> shapes = new();
             List<StrataCavePrimitive> primitives = new();
+            List<StrataCaveLayerOption> options = new();
             StrataPalette palette = world.Palette;
             foreach (StrataCaveFeature cave in caves)
             {
@@ -65,6 +66,9 @@ namespace Strata.Editor
                 if (own.Count == 0) continue;
                 Bounds bounds = cave.Bounds3D;
                 StrataCaveNoise noise = cave.Noise;
+                int firstOption = options.Count;
+                int wallOptions = AddOptions(options, cave.WallLayers, palette, world.BiomeAreas);
+                int floorOptions = AddOptions(options, cave.FloorLayers, palette, world.BiomeAreas);
                 shapes.Add(new StrataCaveShape
                 {
                     Operation = cave.Operation,
@@ -79,6 +83,10 @@ namespace Strata.Editor
                     Max = bounds.max,
                     WallLayer = cave.WallLayer != null ? palette.IndexOf(cave.WallLayer) : -1,
                     FloorLayer = cave.FloorLayer != null ? palette.IndexOf(cave.FloorLayer) : -1,
+                    ExplicitFloor = cave.HasFloorLayer,
+                    FirstOption = firstOption,
+                    WallOptions = wallOptions,
+                    FloorOptions = floorOptions,
                     FloorCos = math.cos(math.radians(cave.FloorSlope))
                 });
                 primitives.AddRange(own);
@@ -88,14 +96,38 @@ namespace Strata.Editor
                 Heights = world.Heightfield.View,
                 Shapes = new NativeArray<StrataCaveShape>(shapes.ToArray(), Allocator.TempJob),
                 Primitives = new NativeArray<StrataCavePrimitive>(primitives.ToArray(), Allocator.TempJob),
+                LayerOptions = new NativeArray<StrataCaveLayerOption>(options.ToArray(), Allocator.TempJob),
+                Biomes = world.Biomes?.GetView(world.Heightfield.TileSlots) ?? default,
                 Reach = Reach(world.Heightfield.Grid, voxel)
             };
+        }
+
+        // A cave's biome layers in the palette, as options (an empty biome list matches every biome); returns how many.
+        private static int AddOptions(List<StrataCaveLayerOption> options, IReadOnlyList<StrataCaveBiomeLayer> layers, StrataPalette palette,
+                                      IReadOnlyList<StrataBiomeArea> biomes)
+        {
+            int count = 0;
+            foreach (StrataCaveBiomeLayer layer in layers)
+            {
+                int index = palette.IndexOf(layer.Layer);
+                if (index < 0) continue;
+                StrataBiomeFilter filter = new()
+                {
+                    Mode = layer.Biomes != null && layer.Biomes.Count > 0 ? StrataBiomeFilterMode.OnlyIn : StrataBiomeFilterMode.Any,
+                    Biomes = layer.Biomes
+                };
+                filter.Mask(biomes, out uint4 low, out uint4 high);
+                options.Add(new StrataCaveLayerOption { Layer = index, MaskLow = low, MaskHigh = high });
+                count++;
+            }
+            return count;
         }
 
         private static void Dispose(StrataCaveField field)
         {
             field.Shapes.Dispose();
             field.Primitives.Dispose();
+            field.LayerOptions.Dispose();
         }
 
         // Cuts the given tiles' holes into the heightfield and recomputes the features' ground weights. The CPU heights
@@ -487,7 +519,8 @@ namespace Strata.Editor
             HashSet<int> wanted = new(tiles);
             Dictionary<int, StrataFormationRecord[]> result = new();
             foreach (int tile in wanted) result[tile] = null;
-            StrataFormationPlacer.Inputs(formations, prototypes, out NativeArray<StrataFormationPlacer.Box> boxes, out NativeArray<StrataFormationPlacer.Entry> entries);
+            StrataFormationPlacer.Inputs(formations, prototypes, world.BiomeAreas, out NativeArray<StrataFormationPlacer.Box> boxes,
+                                         out NativeArray<StrataFormationPlacer.Entry> entries);
             if (boxes.Length > 0 && _bricksWorld == world)
             {
                 List<int3> coords = new();
@@ -508,6 +541,7 @@ namespace Strata.Editor
                         Cell = _bricksVoxel,
                         Boxes = boxes,
                         Entries = entries,
+                        Biomes = world.Biomes?.GetView(world.Heightfield.TileSlots) ?? default,
                         Output = new NativeList<StrataFormationPlacer.Placed>(0, Allocator.TempJob)
                     };
                     jobs.Add((coord, job));

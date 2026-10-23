@@ -9,8 +9,8 @@ using UnityEngine.Rendering;
 
 namespace Strata.Editor
 {
-    // Bakes a world: evaluates every feature over the whole world on the GPU (heights), reads the heights back, cuts the
-    // caves' holes and works out their ground weights, evaluates the moisture map, splats and forest and grass densities,
+    // Bakes a world: evaluates every feature over the whole world on the GPU (heights), reads the heights back, paints
+    // the biome maps, cuts the caves' holes and works out their ground weights, evaluates the moisture map, splats and forest and grass densities,
     // places the trees, meshes the caves, writes each tile to
     // StreamingAssets/Strata/<world>/tile_x_z.bytes (rewriting only tiles whose contents changed) with the far file
     // beside them (the whole world's heights and splats coarsely, and every CDLOD node's bounds), and points the world's
@@ -48,6 +48,11 @@ namespace Strata.Editor
                 if (heightRequest.hasError) return $"Strata bake: reading back the heights of tile {tile} failed.";
                 StrataPreview.CopyTile(heightfield, tile, heightRequest.GetData<ushort>());
             }
+            // biomes before everything that is limited to them (splats, trees, grass, cave layers, formations)
+            List<StrataBiomeArea> biomes = StrataBiomeEvaluator.BiomesOf(nodes);
+            world.SetBiomeAreas(biomes);
+            if (biomes.Count > 0) StrataBiomeEvaluator.Evaluate(world, biomes, StrataPreview.AllTiles(grid));
+            else world.Biomes.Fill();
             List<StrataCaveFeature> caves = StrataCaveEvaluator.CavesOf(nodes);
             int holedTiles = StrataPreview.Caves.EvaluateSurface(world, caves, StrataPreview.AllTiles(grid));
             if (StrataSplatEvaluator.NeedsMoisture(world, nodes)) splats.UpdateMoisture(world, nodes);
@@ -93,6 +98,11 @@ namespace Strata.Editor
                 SplatWeights = new NativeArray<uint>(farSplats.x * farSplats.y, Allocator.Temp),
                 NodeMinMax = new NativeArray<Unity.Mathematics.float2>(heightfield.NodeMinMax, Allocator.Temp)
             };
+            if (biomes.Count > 0)
+            {
+                far.BiomeSurface = new NativeArray<uint>(farSplats.x * farSplats.y, Allocator.Temp);
+                far.BiomeUnderground = new NativeArray<uint>(farSplats.x * farSplats.y, Allocator.Temp);
+            }
 
             long treeCount = 0;
             int written = 0;
@@ -129,11 +139,21 @@ namespace Strata.Editor
                     int farIndex = (tz * grid.SplatResolution + z) / StrataHeights.FarSplatStep * farSplats.x + (tx * grid.SplatResolution + x) / StrataHeights.FarSplatStep;
                     far.SplatIndices[farIndex] = indices[z * grid.SplatSamples + x];
                     far.SplatWeights[farIndex] = weights[z * grid.SplatSamples + x];
+                    if (biomes.Count == 0) continue;
+                    int texel = heightfield.SlotOf(tile) * grid.SplatSamplesPerTile + z * grid.SplatSamples + x;
+                    far.BiomeSurface[farIndex] = world.Biomes.CpuSurface[texel];
+                    far.BiomeUnderground[farIndex] = world.Biomes.CpuUnderground[texel];
+                }
+                StrataTileExtras extras = StrataCaveEvaluator.Extras(world, tile, caveData[tile], formationData[tile]);
+                if (biomes.Count > 0)
+                {
+                    extras ??= new StrataTileExtras();
+                    extras.Biomes = world.Biomes.Encode(heightfield.SlotOf(tile));
                 }
                 if (StrataTileFile.Write(StrataWorldData.TilePath(dataFolder, tx, tz), grid.Samples,
                                      heightfield.Heights.Slice(tile * grid.SamplesPerTile, grid.SamplesPerTile),
                                      grid.SplatSamples, indices.Slice(), weights.Slice(), strataMap.Slice(), world.Trees[tile].Records,
-                                     grassPrototypes.Length, grass, StrataCaveEvaluator.Extras(world, tile, caveData[tile], formationData[tile]))) written++;
+                                     grassPrototypes.Length, grass, extras)) written++;
                 grass.Dispose();
                 treeCount += world.Trees[tile].Records.Length;
             }
@@ -155,14 +175,14 @@ namespace Strata.Editor
 
             Undo.RecordObject(world, "Bake Strata World");
             world.Data.Set(grid, dataFolder, strata, prototypes, grassPrototypes, StrataCaveEvaluator.VoxelSize(world), holedTiles,
-                          formationPrototypes.ToArray());
+                          formationPrototypes.ToArray(), biomes.ToArray());
             EditorUtility.SetDirty(world);
             EditorSceneManager.MarkSceneDirty(world.gameObject.scene);
             world.NotifyHeightsChanged();
 
             float mb = (grid.TileCount * StrataTileFile.Size(grid, 0, grassPrototypes.Length) + treeCount * 10L + farBytes) / (1024f * 1024f);
             return $"Strata bake: {grid.TileCount} tiles ({grid}; {written} changed), {treeCount} trees of {prototypes.Length} prototypes, " +
-                   $"{grassPrototypes.Length} grass prototypes, {caveBricks} cave bricks, {holedTiles} holed tiles, {formationCount} formations, {mb:0.#} MB, " +
+                   $"{grassPrototypes.Length} grass prototypes, {caveBricks} cave bricks, {holedTiles} holed tiles, {formationCount} formations, {biomes.Count} biomes, {mb:0.#} MB, " +
                    $"{watch.Elapsed.TotalSeconds:0.00} s, to {tileFolder}; save the scene to keep the baked data";
         }
     }

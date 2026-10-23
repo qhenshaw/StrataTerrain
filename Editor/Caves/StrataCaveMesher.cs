@@ -334,6 +334,12 @@ namespace Strata.Editor
                     StrataCaveShape shape = Field.Shapes[dominant];
                     wall = shape.WallLayer;
                     floor = shape.FloorLayer;
+                    if (shape.WallOptions + shape.FloorOptions > 0)
+                    {
+                        int biome = Field.UndergroundBiome(p);
+                        wall = Field.PickLayer(shape.FirstOption, shape.WallOptions, biome, shape.WallLayer);
+                        floor = Field.PickLayer(shape.FirstOption + shape.WallOptions, shape.FloorOptions, biome, shape.ExplicitFloor ? shape.FloorLayer : wall);
+                    }
                     floorWeight = math.saturate((normal.y - (shape.FloorCos - 0.1f)) / 0.2f);
                 }
                 position = p;

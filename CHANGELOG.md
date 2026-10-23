@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.13.0
+Biomes.
+- The **Biome Area** feature (GameObject > Strata > Biome Area, or Biome Area (Whole World)) names a region of the
+  world with a colour, Surface or Underground. Its outline is every closed spline in the SplineContainers on it and
+  its children (several splines make one biome of separate patches); without one it covers the whole world, the
+  default biome. Areas paint over the ones above them in hierarchy order, easing out over a falloff centred on the
+  outline that wanders by edge noise. They don't change heights.
+- `StrataBiomeEvaluator` paints a surface and an underground biome map on the CPU (Burst) at splat resolution, the two
+  strongest biomes per texel with weights, before the splats, trees, grass and caves, which can be limited to biomes
+  (`StrataBiomeFilter`: any, only in, not in):
+  - palette layers' rules, by the Palette's new **Biome Masks** list (layers are shared assets, so the masks live on
+    the world with its areas);
+  - forests (Tree Scatter) and meadows (Grass Scatter), by their new Biomes filter;
+  - cave walls and floors: cave features get Wall Layers and Floor Layers lists of a layer per underground biome
+    (before the default layer), picked per vertex, dithered between two biomes where they blend;
+  - cave formations: each Cave Formations entry has a Biomes filter on the underground biome.
+  Worlds without biome areas bake exactly as before.
+- Tiles store their biome maps run-length coded (flag Biomes, version 6) and the far file the far biome maps (version
+  2, only with biomes); Baked Data lists the biome areas. `StrataWorld.Biomes` keeps them on the CPU (streamed with the
+  tiles) and `StrataGround.TryGetBiome` gives the strongest biome at a position, the underground map's below the
+  surface.
+
 ## 0.12.1
 - Bake Probes now really bakes against the caves: their probe proxies were merged with `CombineMeshes`, which drops
   the vertices of the cave meshes' compressed formats, so the proxies were empty (no probes placed around caves, no

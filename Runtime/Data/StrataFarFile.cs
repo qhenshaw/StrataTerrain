@@ -10,12 +10,14 @@ namespace Strata
     // far height samples x and z, far splat samples x and z, node count), then the far heights (every
     // StrataHeights.FarStep-th world sample, ushorts), the far splats (every FarSplatStep-th splat texel: four layer
     // indices, then four weights, RGBA8 each), and every CDLOD node's min and max height (float2s, as StrataGrid numbers
-    // them).
+    // them). Version 2 follows that with the far biome maps (surface then underground, StrataBiomeMap texels at the far
+    // splats' spacing); a world without biomes is still written as version 1.
     public static class StrataFarFile
     {
         public const string Name = "far.bytes";
         private const int Magic = 0x46525453; // "STRF"
-        private const int Version = 1;
+        private const int Version = 2;
+        private const int PlainVersion = 1;
 
         public struct Data : IDisposable
         {
@@ -23,6 +25,9 @@ namespace Strata
             public NativeArray<uint> SplatIndices;
             public NativeArray<uint> SplatWeights;
             public NativeArray<float2> NodeMinMax;
+            // version 2, else not created
+            public NativeArray<uint> BiomeSurface;
+            public NativeArray<uint> BiomeUnderground;
 
             public void Dispose()
             {
@@ -30,6 +35,8 @@ namespace Strata
                 if (SplatIndices.IsCreated) SplatIndices.Dispose();
                 if (SplatWeights.IsCreated) SplatWeights.Dispose();
                 if (NodeMinMax.IsCreated) NodeMinMax.Dispose();
+                if (BiomeSurface.IsCreated) BiomeSurface.Dispose();
+                if (BiomeUnderground.IsCreated) BiomeUnderground.Dispose();
             }
         }
 
@@ -38,8 +45,9 @@ namespace Strata
             int2 far = StrataHeights.FarSamples(grid), farSplats = StrataHeights.FarSplatSamples(grid);
             using FileStream stream = File.Create(path);
             using BinaryWriter writer = new(stream);
+            bool biomes = data.BiomeSurface.IsCreated && data.BiomeUnderground.IsCreated;
             writer.Write(Magic);
-            writer.Write(Version);
+            writer.Write(biomes ? Version : PlainVersion);
             writer.Write(far.x);
             writer.Write(far.y);
             writer.Write(farSplats.x);
@@ -49,6 +57,9 @@ namespace Strata
             writer.Write(data.SplatIndices.Reinterpret<byte>(4).ToArray());
             writer.Write(data.SplatWeights.Reinterpret<byte>(4).ToArray());
             writer.Write(data.NodeMinMax.Reinterpret<byte>(8).ToArray());
+            if (!biomes) return;
+            writer.Write(data.BiomeSurface.Reinterpret<byte>(4).ToArray());
+            writer.Write(data.BiomeUnderground.Reinterpret<byte>(4).ToArray());
         }
 
         public static unsafe Data Read(string path, StrataGrid grid, Allocator allocator)
@@ -74,6 +85,13 @@ namespace Strata
                 Copy(start, bytes.Length, ref offset, data.SplatIndices.GetUnsafePtr(), data.SplatIndices.Length * 4L);
                 Copy(start, bytes.Length, ref offset, data.SplatWeights.GetUnsafePtr(), data.SplatWeights.Length * 4L);
                 Copy(start, bytes.Length, ref offset, data.NodeMinMax.GetUnsafePtr(), data.NodeMinMax.Length * 8L);
+                if (header[1] >= 2)
+                {
+                    data.BiomeSurface = new NativeArray<uint>(farSplats.x * farSplats.y, allocator, NativeArrayOptions.UninitializedMemory);
+                    data.BiomeUnderground = new NativeArray<uint>(farSplats.x * farSplats.y, allocator, NativeArrayOptions.UninitializedMemory);
+                    Copy(start, bytes.Length, ref offset, data.BiomeSurface.GetUnsafePtr(), data.BiomeSurface.Length * 4L);
+                    Copy(start, bytes.Length, ref offset, data.BiomeUnderground.GetUnsafePtr(), data.BiomeUnderground.Length * 4L);
+                }
                 return data;
             }
         }

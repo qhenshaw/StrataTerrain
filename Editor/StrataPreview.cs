@@ -17,8 +17,10 @@ namespace Strata.Editor
     // repainted tiles are read back, and as they arrive the trees of those tiles and their neighbours are placed again;
     // a change to the forests themselves repaints and re-places everything. Caves follow the heights: once the CPU heights
     // of a change have arrived, the tiles a cave edit (or a height change under a cave) touched have their holes cut and
-    // caves meshed again, and their splats and trees repainted for the caves' paint and tree effects. A world is
-    // evaluated in full when first seen or rebuilt.
+    // caves meshed again, and their splats and trees repainted for the caves' paint and tree effects. Biome areas don't
+    // depend on the heights: when any of them changes, every tile's biome maps are painted again at once and the splats
+    // and trees repainted (and the caves meshed again, if underground biomes are involved). A world is evaluated in full
+    // when first seen or rebuilt.
     [InitializeOnLoad]
     public static class StrataPreview
     {
@@ -42,6 +44,8 @@ namespace Strata.Editor
             public int MoistureSignature;
             public int DensitySignature;
             public int PlacementSignature;
+            public int BiomeSignature;
+            public bool HadUnderground;
             // world samples whose caves need evaluating again, once no height readback is outstanding
             public RectInt CaveDirty;
             // the caves are meshed again in full (first sight, palette change) rather than just the bricks under CaveDirty
@@ -153,6 +157,20 @@ namespace Strata.Editor
                     // cave vertices hold palette indices
                     if (hasCaves) caveDirty = StrataEvaluator.WorldRect(grid);
                     state.CaveFull = true;
+                }
+                List<StrataBiomeArea> biomes = StrataBiomeEvaluator.BiomesOf(nodes);
+                int biomeSignature = StrataBiomeEvaluator.Signature(biomes);
+                if (biomeSignature != state.BiomeSignature || state.NeedsFull)
+                {
+                    bool underground = biomes.Exists(b => b.Kind == StrataBiomeKind.Underground);
+                    // cave layers and formations follow the underground biomes
+                    if (hasCaves && (underground || state.HadUnderground)) caveDirty = StrataEvaluator.WorldRect(grid);
+                    state.BiomeSignature = biomeSignature;
+                    state.HadUnderground = underground;
+                    world.SetBiomeAreas(biomes);
+                    if (biomes.Count > 0) StrataBiomeEvaluator.Evaluate(world, biomes, AllTiles(grid));
+                    else world.Biomes.Fill();
+                    splatAll = true;
                 }
                 StrataWorldSettings settings = world.Settings;
                 int moistureSignature = System.HashCode.Combine(settings.UseSeaLevel, settings.SeaLevel, settings.MoistureSpacing,
