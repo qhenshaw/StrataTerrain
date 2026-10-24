@@ -23,6 +23,18 @@ Material:
   m_SavedProperties:
     serializedVersion: 3
     m_TexEnvs:
+    - _StrataFarHeights:
+        m_Texture: {fileID: 0}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    - _StrataFarSplatIndices:
+        m_Texture: {fileID: 0}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    - _StrataFarSplatWeights:
+        m_Texture: {fileID: 0}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
     - _StrataHeights:
         m_Texture: {fileID: 0}
         m_Scale: {x: 1, y: 1}
@@ -36,6 +48,10 @@ Material:
         m_Scale: {x: 1, y: 1}
         m_Offset: {x: 0, y: 0}
     - _StrataLayerNormal:
+        m_Texture: {fileID: 0}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    - _StrataRockMap:
         m_Texture: {fileID: 0}
         m_Scale: {x: 1, y: 1}
         m_Offset: {x: 0, y: 0}
@@ -56,6 +72,7 @@ Material:
     - _GridStrength: 0
     - _MacroScale: 90
     - _MacroStrength: 0.15
+    - _ParallaxStrength: 1
     - _SteepEnd: 0.7
     - _SteepStart: 0.85
     - _TriplanarEnd: 0.6
@@ -65,6 +82,7 @@ Material:
     - _HighColour: {r: 0.54999995, g: 0.52, b: 0.45, a: 1}
     - _LowColour: {r: 0.31999996, g: 0.41999996, b: 0.21999997, a: 1}
     - _SteepColour: {r: 0.41999996, g: 0.39999998, b: 0.37999994, a: 1}
+    - _StrataFar: {r: 64, g: 64, b: 128, a: 128}
     - _StrataGrid: {r: 0, g: 0, b: 512, a: 1}
     - _StrataHeightParams: {r: 0, g: 1, b: 512, a: 1}
     - _StrataLod: {r: 192, g: 0.8, b: 1, a: 0}

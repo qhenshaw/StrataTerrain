@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.15.0
+- Parallax occlusion mapping on the terrain and cave surfaces. Each layer has a Parallax Depth (metres, 0 by default,
+  so nothing changes until it is set) and the material a Parallax Strength (copied to the cave material). The view
+  ray is marched through the layers' height-blended height field on the top-down projection of upward-facing ground,
+  so a deep layer's stones show through a shallow one where height blending lets them. Where layers mix, their depths
+  blend by weight into one scale, so the field has no steps (which would smear the texture) where one layer gives
+  way to another. Steep triplanar ground, walls and ceilings stay flat, and the depth fades out with distance. `StrataParallax.Set(minSteps, maxSteps, distance)`
+  and `Disable()` drive the global `STRATA_PARALLAX` keyword for every Strata material; Debug View has a Parallax mode.
+
 ## 0.14.1
 - Cave walls and floors blend smoothly between biomes instead of dithering per vertex: each vertex keeps the layers of
   both biomes where two meet (ordered by biome index, so neighbours agree) and the second one's share, taken from the

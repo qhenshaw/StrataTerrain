@@ -12,7 +12,7 @@ namespace Strata
     // tree shader's ground tint reads.
     public sealed class StrataPaletteTextures : IDisposable
     {
-        // float4s per layer in LayerData: tiling/normal/blend/flags, tint/smoothness, far scale/occlusion
+        // float4s per layer in LayerData: tiling/normal/blend/flags, tint/smoothness, far scale/occlusion/parallax depth
         public const int Float4sPerLayer = 3;
         private const int HasAlbedo = 1, HasNormal = 2, HasMask = 4, IsStochastic = 8, MaskMher = 16, NormalDirectX = 32;
 
@@ -45,7 +45,7 @@ namespace Strata
                 Color tint = layer.Tint.linear;
                 data[i * Float4sPerLayer] = new Vector4(1f / layer.TileSize, layer.NormalStrength, layer.BlendDepth, flags[i]);
                 data[i * Float4sPerLayer + 1] = new Vector4(tint.r, tint.g, tint.b, layer.Smoothness);
-                data[i * Float4sPerLayer + 2] = new Vector4(1f / layer.FarScale, layer.Occlusion, 0f, 0f);
+                data[i * Float4sPerLayer + 2] = new Vector4(1f / layer.FarScale, layer.Occlusion, layer.ParallaxDepth, 0f);
             }
             if (layers.Count == 0) data[0] = new Vector4(0.25f, 1f, 0.2f, 0f);
             LayerData = new GraphicsBuffer(GraphicsBuffer.Target.Structured, data.Length, 16);

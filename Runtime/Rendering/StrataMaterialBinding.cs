@@ -35,12 +35,13 @@ namespace Strata
         {
             Shader.PropertyToID("_TriplanarStart"), Shader.PropertyToID("_TriplanarEnd"), Shader.PropertyToID("_TriplanarSharpness"),
             Shader.PropertyToID("_FarStart"), Shader.PropertyToID("_FarEnd"), Shader.PropertyToID("_MacroScale"),
-            Shader.PropertyToID("_MacroStrength")
+            Shader.PropertyToID("_MacroStrength"), Shader.PropertyToID("_ParallaxStrength")
         };
 
         public static void Bind(Material material, StrataHeightfield heights, StrataSplatmap splats, StrataPaletteTextures palette,
                                 GraphicsBuffer bands, Vector4 lod)
         {
+            StrataParallax.EnsureDefaults();
             StrataGrid grid = heights.Grid;
             material.SetTexture(HeightsId, heights.Texture);
             material.SetTexture(FarHeightsId, heights.FarTexture);

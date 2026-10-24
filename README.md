@@ -12,7 +12,10 @@ Non-destructive tiled terrain for Unity 6 URP (PC, DX12/Vulkan).
   noise; the moisture inputs are world settings); any feature can also paint a layer where it acts. Splats keep the four strongest layers per texel at 1, 2
   or 4 m. The surface shader height-blends them with triplanar mapping on steep ground, far-distance tiling, macro
   variation and optional hex-tiled stochastic sampling, under URP PBR lighting (forward, or written into the GBuffer
-  under deferred rendering).
+  under deferred rendering). Parallax occlusion mapping gives flat ground and cave floors depth near the camera: each
+  layer's Parallax Depth (metres) scaled by the material's Parallax Strength, switched and tuned for every Strata
+  material by `StrataParallax` (a global keyword, step counts and fade distance; on at 16–32 steps and 30 m until a
+  game sets it).
 - Rock strata: the **Rock Strata** feature terraces steep ground into ledges along jittered, dipping rock beds (baked
   into the heights, so collision follows), and marks it for the surface shader, which pushes each bed's face out
   (on extra half-metre detail patches near the camera, where the slope still leaves the mesh room for it), shades

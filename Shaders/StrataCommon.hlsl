@@ -19,6 +19,7 @@ CBUFFER_START(UnityPerMaterial)
     float _FarEnd;
     float _MacroScale;
     float _MacroStrength;
+    float _ParallaxStrength;
     float _GridSpacing;
     float _GridStrength;
     float _DebugView;
@@ -30,6 +31,8 @@ CBUFFER_END
     UNITY_DOTS_INSTANCING_END(MaterialPropertyMetadata)
     #define _StrataNode UNITY_ACCESS_DOTS_INSTANCED_PROP_WITH_DEFAULT(float4, _StrataNode)
 #endif
+
+float4 _StrataParallaxParams;   // global, from StrataParallax: min steps, max steps, fade distance, unused
 
 #include "StrataBands.hlsl"
 

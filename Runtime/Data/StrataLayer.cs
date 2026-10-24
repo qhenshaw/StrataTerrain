@@ -80,6 +80,8 @@ namespace Strata
         [SerializeField, Range(0f, 1f)] private float _occlusion = 1f;
         [Tooltip("How sharply this layer's height map cuts into its neighbours where they blend; small is sharp.")]
         [SerializeField, Range(0.01f, 1f)] private float _blendDepth = 0.2f;
+        [Tooltip("How deep the height map reads under parallax occlusion mapping, in metres; 0 is flat.")]
+        [SerializeField, Range(0f, 0.5f)] private float _parallaxDepth;
         [Tooltip("Sample with hexagonal tile blending, which hides repetition at about three times the cost.")]
         [SerializeField] private bool _stochastic;
         [Tooltip("Far away, blend towards the texture tiled this many times larger, to hide repetition.")]
@@ -97,6 +99,7 @@ namespace Strata
         public float Smoothness => _smoothness;
         public float Occlusion => _occlusion;
         public float BlendDepth => _blendDepth;
+        public float ParallaxDepth => _parallaxDepth;
         public bool Stochastic => _stochastic;
         public float FarScale => _farScale;
         public StrataLayerRule Rule => _rule;
