@@ -18,8 +18,10 @@ Shader "Strata/TerrainSurface"
         _FarEnd ("Far Tiling Full (m)", Float) = 120
         _MacroScale ("Macro Variation Size (m)", Float) = 90
         _MacroStrength ("Macro Variation Strength", Range(0, 0.5)) = 0.15
+        [Header(Parallax)]
+        _ParallaxStrength ("Parallax Strength", Range(0, 2)) = 1
         [Header(Debug)]
-        [Enum(Off, 0, Layers, 1, Projection, 2, Strata, 3)] _DebugView ("Debug View", Float) = 0
+        [Enum(Off, 0, Layers, 1, Projection, 2, Strata, 3, Parallax, 4)] _DebugView ("Debug View", Float) = 0
         _GridSpacing ("Grid Spacing (m)", Float) = 32
         _GridStrength ("Grid Strength", Range(0, 1)) = 0
         [HideInInspector] _StrataNode ("Node", Vector) = (0, 0, 1, 0)
@@ -60,6 +62,7 @@ Shader "Strata/TerrainSurface"
             HLSLPROGRAM
             #pragma vertex Vert
             #pragma fragment FragForward
+            #pragma multi_compile_fragment _ STRATA_PARALLAX
             #pragma multi_compile_fog
             #pragma multi_compile _ _MAIN_LIGHT_SHADOWS _MAIN_LIGHT_SHADOWS_CASCADE _MAIN_LIGHT_SHADOWS_SCREEN
             #pragma multi_compile _ _ADDITIONAL_LIGHTS_VERTEX _ADDITIONAL_LIGHTS
@@ -91,6 +94,7 @@ Shader "Strata/TerrainSurface"
             #pragma exclude_renderers gles3 glcore
             #pragma vertex Vert
             #pragma fragment FragGBuffer
+            #pragma multi_compile_fragment _ STRATA_PARALLAX
             #pragma multi_compile _ _MAIN_LIGHT_SHADOWS _MAIN_LIGHT_SHADOWS_CASCADE _MAIN_LIGHT_SHADOWS_SCREEN
             #pragma multi_compile_fragment _ _REFLECTION_PROBE_BLENDING
             #pragma multi_compile_fragment _ _REFLECTION_PROBE_BOX_PROJECTION

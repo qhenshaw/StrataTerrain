@@ -1,7 +1,9 @@
 // Texturing for Strata/TerrainSurface's forward pass; included after StrataCommon.hlsl. A pixel finds its four
 // strongest palette layers from the splat maps (merging the four nearest splat texels), samples each layer's albedo,
 // normal and mask maps (top-down on gentle ground, triplanar on steep ground, optionally hex-tiled, and blended towards
-// a larger tiling with distance), height-blends the layers, and returns the surface for URP's PBR lighting.
+// a larger tiling with distance), height-blends the layers, and returns the surface for URP's PBR lighting. With
+// STRATA_PARALLAX (StrataParallax), the top-down projection is first shifted by parallax occlusion mapping: the view
+// ray is marched into the layers' height-blended height field near the camera.
 #ifndef STRATA_SURFACE_INCLUDED
 #define STRATA_SURFACE_INCLUDED
 
@@ -13,7 +15,7 @@ TEXTURE2D_ARRAY(_StrataLayerAlbedo);
 SAMPLER(sampler_StrataLayerAlbedo);
 TEXTURE2D_ARRAY(_StrataLayerNormal);
 TEXTURE2D_ARRAY(_StrataLayerMask);
-StructuredBuffer<float4> _StrataLayerData;  // 3 per layer: (1/tile, normal strength, blend depth, flags), (tint, smoothness), (1/far scale, occlusion)
+StructuredBuffer<float4> _StrataLayerData;  // 3 per layer: (1/tile, normal strength, blend depth, flags), (tint, smoothness), (1/far scale, occlusion, parallax depth)
 
 #define STRATA_HAS_ALBEDO 1
 #define STRATA_HAS_NORMAL 2
@@ -84,10 +86,12 @@ float2 StrataHash2(int2 p)
     return float2(h & 0xffffu, h >> 16) / 65535.0;
 }
 
-// One map sampled at uv: plainly, or hex-tiled (three randomly offset copies blended over a triangle grid).
-float4 SampleMap(TEXTURE2D_ARRAY_PARAM(map, samp), float2 uv, int layer, bool stochastic)
+// One map sampled at uv: plainly, or hex-tiled (three randomly offset copies blended over a triangle grid). Shift
+// (parallax) moves the sample without touching the mip, which follows the unshifted uv.
+float4 SampleMap(TEXTURE2D_ARRAY_PARAM(map, samp), float2 uv, float2 shift, int layer, bool stochastic)
 {
     float2 dx = ddx(uv), dy = ddy(uv);
+    uv += shift;
     if (!stochastic) return SAMPLE_TEXTURE2D_ARRAY_GRAD(map, samp, uv, layer, dx, dy);
 
     float2 skewed = mul(float2x2(1.0, 0.0, -0.57735027, 1.15470054), uv * 3.4641016);
@@ -113,13 +117,16 @@ struct LayerSurface
 };
 
 // A layer at one projection's uv: near tiling, far tiling, or a distance blend of both. Only the near tiling samples
-// stochastically (three taps a map): far away the larger tiling already hides repeats.
-LayerSurface SampleProjection(int layer, float2 uv, float far, float4 data0, float4 data2)
+// stochastically (three taps a map): far away the larger tiling already hides repeats. Shift is the parallax offset
+// in metres along the projection.
+LayerSurface SampleProjection(int layer, float2 uv, float2 shift, float far, float4 data0, float4 data2)
 {
     int flags = (int)data0.w;
     bool stochastic = (flags & STRATA_STOCHASTIC) != 0;
     float2 nearUV = uv * data0.x;
     float2 farUV = nearUV * data2.x;
+    float2 nearShift = shift * data0.x;
+    float2 farShift = nearShift * data2.x;
     LayerSurface s;
     s.albedo = 0.5;
     s.normalTS = half3(0, 0, 1);
@@ -129,10 +136,11 @@ LayerSurface SampleProjection(int layer, float2 uv, float far, float4 data0, flo
         float amount = step == 0 ? 1.0 - far : far;
         if (amount <= 0.001) continue;
         float2 at = step == 0 ? nearUV : farUV;
+        float2 by = step == 0 ? nearShift : farShift;
         bool scatter = stochastic && step == 0;
-        half3 albedo = (flags & STRATA_HAS_ALBEDO) ? SampleMap(TEXTURE2D_ARRAY_ARGS(_StrataLayerAlbedo, sampler_StrataLayerAlbedo), at, layer, scatter).rgb : 0.5;
-        half3 normal = (flags & STRATA_HAS_NORMAL) ? UnpackNormal(SampleMap(TEXTURE2D_ARRAY_ARGS(_StrataLayerNormal, sampler_StrataLayerAlbedo), at, layer, scatter)) : half3(0, 0, 1);
-        half4 mask = (flags & STRATA_HAS_MASK) ? SampleMap(TEXTURE2D_ARRAY_ARGS(_StrataLayerMask, sampler_StrataLayerAlbedo), at, layer, scatter) : half4(0, 1, 0.5, 0.2);
+        half3 albedo = (flags & STRATA_HAS_ALBEDO) ? SampleMap(TEXTURE2D_ARRAY_ARGS(_StrataLayerAlbedo, sampler_StrataLayerAlbedo), at, by, layer, scatter).rgb : 0.5;
+        half3 normal = (flags & STRATA_HAS_NORMAL) ? UnpackNormal(SampleMap(TEXTURE2D_ARRAY_ARGS(_StrataLayerNormal, sampler_StrataLayerAlbedo), at, by, layer, scatter)) : half3(0, 0, 1);
+        half4 mask = (flags & STRATA_HAS_MASK) ? SampleMap(TEXTURE2D_ARRAY_ARGS(_StrataLayerMask, sampler_StrataLayerAlbedo), at, by, layer, scatter) : half4(0, 1, 0.5, 0.2);
         // metallic, height, emission, roughness to metallic, occlusion, height, smoothness
         if ((flags & (STRATA_HAS_MASK | STRATA_MASK_MHER)) == (STRATA_HAS_MASK | STRATA_MASK_MHER)) mask = half4(mask.r, 1.0, mask.g, 1.0 - mask.a);
         if (flags & STRATA_NORMAL_DIRECTX) normal.y = -normal.y;
@@ -142,6 +150,119 @@ LayerSurface SampleProjection(int layer, float2 uv, float far, float4 data0, flo
     s.normalTS.xy *= data0.y;
     return s;
 }
+
+#ifdef STRATA_PARALLAX
+// One layer as the parallax march sees it: its tiling, depth in metres (0 for none), and the mask channel holding its
+// height (zero when it has no mask, which reads as half height like the surface's default mask).
+struct StrataParallaxLayer
+{
+    int index;
+    float tile;
+    float depth;
+    float4 channel;
+};
+
+StrataParallaxLayer ParallaxLayer(int layer, float weight, float fade)
+{
+    StrataParallaxLayer l;
+    l.index = max(layer, 0);
+    l.tile = 0.0;
+    l.depth = 0.0;
+    l.channel = 0.0;
+    if (weight < 0.003 || layer < 0) return l;
+    float4 data0 = _StrataLayerData[layer * 3];
+    int flags = (int)data0.w;
+    l.tile = data0.x;
+    if (flags & STRATA_HAS_MASK)
+    {
+        l.channel = (flags & STRATA_MASK_MHER) ? float4(0, 1, 0, 0) : float4(0, 0, 1, 0);
+        l.depth = _StrataLayerData[layer * 3 + 2].z * _ParallaxStrength * fade;
+    }
+    return l;
+}
+
+float ParallaxHeight(StrataParallaxLayer l, float2 xz, float2 dx, float2 dy)
+{
+    if (dot(l.channel, 1.0) <= 0.0) return 0.5;
+    return dot(SAMPLE_TEXTURE2D_ARRAY_GRAD(_StrataLayerMask, sampler_StrataLayerAlbedo, xz * l.tile, l.index, dx * l.tile, dy * l.tile), l.channel);
+}
+
+// The four layers for the march, with which are in use, their weights, the weighted blend depth that height blending
+// uses, and the pixel's depth scale (the layers' parallax depths by weight). Built from separate per-layer calls: the
+// compiler can't write vector slots by index in unrolled loops.
+struct StrataParallaxLayers
+{
+    StrataParallaxLayer l0, l1, l2, l3;
+    float4 active;
+    float4 weight;
+    float blendDepth;
+    float top;
+    float scale;
+};
+
+// How far below the top of the height field the surface lies at xz, in metres. The field is the height-blended
+// height (each layer's height plus weight, blended as the surface blends them), which is what decides the layer seen
+// and has no steps where one layer gives way to another; one scale for all layers keeps it so (a depth per layer
+// would drop by the difference at the switch, a wall that smears the texture down it).
+float StrataParallaxDepth(StrataParallaxLayers p, float2 xz, float2 dx, float2 dy)
+{
+    float4 height = float4(ParallaxHeight(p.l0, xz, dx, dy), ParallaxHeight(p.l1, xz, dx, dy),
+                           ParallaxHeight(p.l2, xz, dx, dy), ParallaxHeight(p.l3, xz, dx, dy));
+    float4 blendHeight = lerp(-1e5, height + p.weight, p.active);
+    float top = max(max(blendHeight.x, blendHeight.y), max(blendHeight.z, blendHeight.w));
+    float4 blend = max(blendHeight - (top - p.blendDepth), 0.0);
+    blend /= max(dot(blend, 1.0), 1e-5);
+    return (p.top - dot(blend, blendHeight * p.active)) * p.scale;
+}
+
+// The top-down projection's parallax offset in metres of world xz: the view ray marched in even steps of depth (more
+// at grazing angles) until it falls below the height field, then refined between the last two steps. Fades to nothing
+// by the StrataParallax distance. dx and dy are the screen derivatives of positionWS.xz, for the mips.
+float2 StrataParallaxShift(StrataLayers layers, float3 positionWS, float3 geometricNormal, float distance, float2 dx, float2 dy)
+{
+    float fade = 1.0 - smoothstep(_StrataParallaxParams.z * 0.6, _StrataParallaxParams.z, distance);
+    if (fade <= 0.0) return 0.0;
+
+    StrataParallaxLayers p;
+    p.l0 = ParallaxLayer(layers.index.x, layers.weight.x, fade);
+    p.l1 = ParallaxLayer(layers.index.y, layers.weight.y, fade);
+    p.l2 = ParallaxLayer(layers.index.z, layers.weight.z, fade);
+    p.l3 = ParallaxLayer(layers.index.w, layers.weight.w, fade);
+    p.active = (float4)(layers.weight >= 0.003) * (float4)(layers.index >= 0);
+    p.weight = layers.weight;
+    p.blendDepth = 0.0;
+    [unroll] for (int k = 0; k < 4; k++)
+        if (p.active[k] > 0.0) p.blendDepth += _StrataLayerData[layers.index[k] * 3].z * layers.weight[k];
+    p.scale = dot(layers.weight * p.active, float4(p.l0.depth, p.l1.depth, p.l2.depth, p.l3.depth));
+    // the highest a blended height can be; the surface is never more than 1 + blend depth below it
+    float4 activeWeight = layers.weight * p.active;
+    p.top = 1.0 + max(max(activeWeight.x, activeWeight.y), max(activeWeight.z, activeWeight.w));
+    float deepest = (1.0 + p.blendDepth) * p.scale;
+    if (deepest <= 1e-4) return 0.0;
+
+    // a metre down along the normal moves the ray this far across the top-down projection
+    float3 view = normalize(GetCameraPositionWS() - positionWS);
+    float facing = max(dot(view, geometricNormal), 0.15);
+    float2 direction = -view.xz / facing;
+    int steps = (int)lerp(_StrataParallaxParams.y, _StrataParallaxParams.x, facing);
+    float stepDepth = deepest / steps;
+
+    float surface = StrataParallaxDepth(p, positionWS.xz, dx, dy);
+    if (surface <= 0.0) return 0.0;
+    float ray = 0.0, previousRay = 0.0, previousSurface = surface;
+    [loop] for (int i = 0; i < steps; i++)
+    {
+        previousRay = ray;
+        previousSurface = surface;
+        ray += stepDepth;
+        surface = StrataParallaxDepth(p, positionWS.xz + direction * ray, dx, dy);
+        if (ray >= surface) break;
+    }
+    float above = previousSurface - previousRay, below = ray - surface;
+    float hit = lerp(previousRay, ray, above / max(above + below, 1e-5));
+    return direction * hit;
+}
+#endif
 
 struct StrataSurfaceOutput
 {
@@ -205,6 +326,14 @@ StrataSurfaceOutput StrataSurfaceWith(StrataLayers layers, StrataRock rock, floa
     float3 axisSign = sign(geometricNormal + 1e-5);
     float far = saturate((distance - _FarStart) / max(_FarEnd - _FarStart, 1e-3));
 
+    // parallax only on the top-down projection of ground that faces up (cave floors, not ceilings)
+    float2 parallax = 0.0;
+    #ifdef STRATA_PARALLAX
+        float2 dxXZ = ddx(positionWS.xz), dyXZ = ddy(positionWS.xz);
+        if (projection.y > 0.01 && geometricNormal.y > 0.0)
+            parallax = StrataParallaxShift(layers, positionWS, geometricNormal, distance, dxXZ, dyXZ);
+    #endif
+
     half3 albedo[4];
     float3 normal[4];
     half4 mask[4];
@@ -230,21 +359,21 @@ StrataSurfaceOutput StrataSurfaceWith(StrataLayers layers, StrataRock rock, floa
         // whiteout-blended triplanar normals (Ben Golus), each projection's tangent normal lifted onto its axis
         if (projection.x > 0.01)
         {
-            LayerSurface s = SampleProjection(layer, float2(positionWS.z * axisSign.x + sideShift, sideV), far, data0, data2);
+            LayerSurface s = SampleProjection(layer, float2(positionWS.z * axisSign.x + sideShift, sideV), 0.0, far, data0, data2);
             s.normalTS.x *= axisSign.x;
             float3 nx = float3(s.normalTS.xy + geometricNormal.zy, abs(s.normalTS.z) * geometricNormal.x);
             a += s.albedo * projection.x; m += s.mask * projection.x; n += nx.zyx * projection.x;
         }
         if (projection.y > 0.01)
         {
-            LayerSurface s = SampleProjection(layer, positionWS.xz * float2(axisSign.y, 1), far, data0, data2);
+            LayerSurface s = SampleProjection(layer, positionWS.xz * float2(axisSign.y, 1), parallax, far, data0, data2);
             s.normalTS.x *= axisSign.y;
             float3 ny = float3(s.normalTS.xy + geometricNormal.xz, abs(s.normalTS.z) * geometricNormal.y);
             a += s.albedo * projection.y; m += s.mask * projection.y; n += ny.xzy * projection.y;
         }
         if (projection.z > 0.01)
         {
-            LayerSurface s = SampleProjection(layer, float2(positionWS.x * -axisSign.z + sideShift, sideV), far, data0, data2);
+            LayerSurface s = SampleProjection(layer, float2(positionWS.x * -axisSign.z + sideShift, sideV), 0.0, far, data0, data2);
             s.normalTS.x *= -axisSign.z;
             float3 nz = float3(s.normalTS.xy + geometricNormal.xy, abs(s.normalTS.z) * geometricNormal.z);
             a += s.albedo * projection.z; m += s.mask * projection.z; n += nz * projection.z;
@@ -283,7 +412,10 @@ StrataSurfaceOutput StrataSurfaceWith(StrataLayers layers, StrataRock rock, floa
     float macro = StrataValueNoise(positionWS.xz / _MacroScale) * 0.65 + StrataValueNoise(positionWS.xz / (_MacroScale * 0.27)) * 0.35;
     o.albedo *= 1.0 + (macro - 0.5) * 2.0 * _MacroStrength;
 
-    if (_DebugView > 2.5)
+    // parallax: red is the offset (full at 10 cm), blue where the top-down projection gets none
+    if (_DebugView > 3.5)
+        o.albedo = half3(saturate(length(parallax) / 0.1), 0.0, projection.y > 0.01 && geometricNormal.y > 0.0 ? 0.0 : 0.3);
+    else if (_DebugView > 2.5)
         o.albedo = half3(rock.weight, rock.weight > 0.5 && rock.definition.alignedUVs > 0.5 ? 1.0 : 0.0, 0.0);
     else if (_DebugView > 1.5)
         o.albedo = projection;
