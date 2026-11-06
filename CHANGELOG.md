@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.16.0
+- Leaf Map on `Strata/Tree`: a second albedo, colour and normal map used where vertex alpha is above a threshold, for
+  meshes that keep trunk and leaves in one material. Shadows, depth and impostors clip by the same choice, and Foliage
+  From has a Leaf Map option (only the leaves get translucency and tint). Off by default, so existing materials are
+  unchanged.
+- Tree prototypes convert Synty's foliage shader (`_Trunk_Texture` / `_Leaf_Texture`, leaves where vertex alpha is
+  above zero): whole trees get the trunk texture with the leaves as the Leaf Map and sway by vertex alpha; leaf cards
+  (the same texture for both) become alpha-clipped foliage. Rebuild prototypes made from Synty trees to apply.
+
 ## 0.15.0
 - Parallax occlusion mapping on the terrain and cave surfaces. Each layer has a Parallax Depth (metres, 0 by default,
   so nothing changes until it is set) and the material a Parallax Strength (copied to the cave material). The view

@@ -26,8 +26,14 @@ Shader "Strata/Tree"
         [NoScaleOffset] _MaskMap ("Smoothness Map", 2D) = "white" {}
         _SmoothnessRemap ("Smoothness Range (min, max)", Vector) = (0, 1, 0, 0)
         [Enum(UnityEngine.Rendering.CullMode)] _Cull ("Cull", Float) = 2
+        [Header(Leaf Map)]
+        [Toggle] _LeafMapOn ("Leaf Map Where Vertex Alpha Is Above Threshold", Float) = 0
+        _LeafMap ("Leaf Albedo", 2D) = "white" {}
+        _LeafColor ("Leaf Colour", Color) = (1, 1, 1, 1)
+        [Normal] _LeafBumpMap ("Leaf Normal Map", 2D) = "bump" {}
+        _LeafThreshold ("Vertex Alpha Threshold", Range(0, 1)) = 0
         [Header(Foliage)]
-        [Enum(Constant, 0, UV0 X, 1)] _FoliageSource ("Foliage From", Float) = 0
+        [Enum(Constant, 0, UV0 X, 1, Leaf Map, 2)] _FoliageSource ("Foliage From", Float) = 0
         _Foliage ("Foliage (constant)", Range(0, 1)) = 0
         _Translucency ("Translucency", Range(0, 1)) = 0.35
         _HueVariation ("Hue Variation", Range(0, 0.5)) = 0.2
@@ -69,6 +75,10 @@ Shader "Strata/Tree"
             float _SmoothnessSource;
             float4 _SmoothnessRemap;
             float _Cull;
+            float4 _LeafMap_ST;
+            float4 _LeafColor;
+            float _LeafMapOn;
+            float _LeafThreshold;
             float _FoliageSource;
             float _Foliage;
             float _Translucency;
@@ -93,6 +103,8 @@ Shader "Strata/Tree"
         TEXTURE2D(_MaskMap);
         TEXTURE2D(_BumpMap);
         SAMPLER(sampler_BumpMap);
+        TEXTURE2D(_LeafMap);
+        TEXTURE2D(_LeafBumpMap);
 
         struct Attributes
         {
@@ -104,9 +116,24 @@ Shader "Strata/Tree"
             UNITY_VERTEX_INPUT_INSTANCE_ID
         };
 
+        // Leaf Map: meshes that keep trunk and leaves in one material (Synty's foliage) mark the leaves with vertex alpha;
+        // those pixels take the leaf textures instead of the base ones.
+        half IsLeaf(half vertexAlpha)
+        {
+            return _LeafMapOn > 0.5 && vertexAlpha > _LeafThreshold ? 1.0h : 0.0h;
+        }
+
         float Foliage(Attributes input)
         {
+            if (_FoliageSource > 1.5) return IsLeaf(input.color.a);
             return _FoliageSource > 0.5 ? input.uv.x : _Foliage;
+        }
+
+        half4 SampleAlbedo(float2 uv, half vertexAlpha)
+        {
+            half4 leaf = SAMPLE_TEXTURE2D(_LeafMap, sampler_BaseMap, uv * _LeafMap_ST.xy + _LeafMap_ST.zw) * _LeafColor;
+            half4 base = SAMPLE_TEXTURE2D(_BaseMap, sampler_BaseMap, uv * _BaseMap_ST.xy + _BaseMap_ST.zw) * _BaseColor;
+            return IsLeaf(vertexAlpha) > 0.5 ? leaf : base;
         }
 
         float3 WindyPosition(Attributes input, StrataTreeSpace space)
@@ -120,7 +147,7 @@ Shader "Strata/Tree"
         // Albedo and coverage, without the per-tree tint.
         half4 BaseAlbedo(float2 uv, half4 vertexColour)
         {
-            half4 albedo = SAMPLE_TEXTURE2D(_BaseMap, sampler_BaseMap, uv * _BaseMap_ST.xy + _BaseMap_ST.zw) * _BaseColor;
+            half4 albedo = SampleAlbedo(uv, vertexColour.a);
             if (_VertexColour > 0.5)
             {
                 half3 colour = vertexColour.rgb;
@@ -133,10 +160,10 @@ Shader "Strata/Tree"
             return albedo;
         }
 
-        void AlphaOnly(float2 uv)
+        void AlphaOnly(float2 uv, half vertexAlpha)
         {
             if (_AlphaClip > 0.5)
-                clip(SAMPLE_TEXTURE2D(_BaseMap, sampler_BaseMap, uv * _BaseMap_ST.xy + _BaseMap_ST.zw).a * _BaseColor.a - _Cutoff);
+                clip(SampleAlbedo(uv, vertexAlpha).a - _Cutoff);
         }
         ENDHLSL
 
@@ -217,6 +244,7 @@ Shader "Strata/Tree"
                 float4 positionCS : SV_POSITION;
                 float2 uv : TEXCOORD0;
                 nointerpolation float fade : TEXCOORD1;
+                half vertexAlpha : TEXCOORD2;
             };
 
             Varyings Vert(Attributes input)
@@ -224,6 +252,7 @@ Shader "Strata/Tree"
                 UNITY_SETUP_INSTANCE_ID(input);
                 Varyings output = (Varyings)0;
                 StrataTreeSpace space = StrataTreeInstance();
+                output.vertexAlpha = input.color.a;
                 float3 positionWS = WindyPosition(input, space);
                 float3 normalWS = StrataTreeNormalToWorld(space, input.normalOS);
                 #if defined(_CASTING_PUNCTUAL_LIGHT_SHADOW)
@@ -246,7 +275,7 @@ Shader "Strata/Tree"
             half4 Frag(Varyings input) : SV_Target
             {
                 StrataFadeClip(input.positionCS.xy, input.fade);
-                AlphaOnly(input.uv);
+                AlphaOnly(input.uv, input.vertexAlpha);
                 return 0;
             }
             ENDHLSL
@@ -268,6 +297,7 @@ Shader "Strata/Tree"
                 float4 positionCS : SV_POSITION;
                 float2 uv : TEXCOORD0;
                 nointerpolation float fade : TEXCOORD1;
+                half vertexAlpha : TEXCOORD2;
             };
 
             Varyings Vert(Attributes input)
@@ -278,13 +308,14 @@ Shader "Strata/Tree"
                 output.positionCS = TransformWorldToHClip(WindyPosition(input, space));
                 output.uv = input.uv;
                 output.fade = space.fade;
+                output.vertexAlpha = input.color.a;
                 return output;
             }
 
             half4 Frag(Varyings input) : SV_Target
             {
                 StrataFadeClip(input.positionCS.xy, input.fade);
-                AlphaOnly(input.uv);
+                AlphaOnly(input.uv, input.vertexAlpha);
                 return input.positionCS.z;
             }
             ENDHLSL
@@ -380,6 +411,7 @@ Shader "Strata/Tree"
                 float3 normalOS : TEXCOORD0;
                 float2 uv : TEXCOORD1;
                 float foliage : TEXCOORD2;
+                half vertexAlpha : TEXCOORD3;
             };
 
             Varyings BakeVert(Attributes input)
@@ -389,12 +421,13 @@ Shader "Strata/Tree"
                 output.normalOS = input.normalOS;
                 output.uv = input.uv;
                 output.foliage = Foliage(input);
+                output.vertexAlpha = input.color.a;
                 return output;
             }
 
             float4 Frag(Varyings input) : SV_Target
             {
-                AlphaOnly(input.uv);
+                AlphaOnly(input.uv, input.vertexAlpha);
                 float3 normal = normalize(input.normalOS);
                 // two-sided leaves show the side facing the camera
                 if (dot(normal, _BakeViewDirection) < 0.0 && _Cull < 0.5) normal = -normal;

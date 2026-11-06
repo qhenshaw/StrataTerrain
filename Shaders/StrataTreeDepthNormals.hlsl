@@ -7,6 +7,7 @@ struct Varyings
     float3 normalWS : TEXCOORD0;
     float2 uv : TEXCOORD1;
     nointerpolation float fade : TEXCOORD2;
+    half vertexAlpha : TEXCOORD3;
 };
 
 Varyings Vert(Attributes input)
@@ -18,13 +19,14 @@ Varyings Vert(Attributes input)
     output.normalWS = StrataTreeNormalToWorld(space, input.normalOS);
     output.uv = input.uv;
     output.fade = space.fade;
+    output.vertexAlpha = input.color.a;
     return output;
 }
 
 half4 Frag(Varyings input, bool frontFace : SV_IsFrontFace) : SV_Target
 {
     StrataFadeClip(input.positionCS.xy, input.fade);
-    AlphaOnly(input.uv);
+    AlphaOnly(input.uv, input.vertexAlpha);
     float3 normalWS = normalize(input.normalWS) * (frontFace ? 1.0 : -1.0);
     #if defined(_GBUFFER_NORMALS_OCT)
         float2 octahedral = PackNormalOctQuadEncode(normalWS);
