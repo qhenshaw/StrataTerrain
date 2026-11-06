@@ -217,9 +217,9 @@ namespace Strata.Editor
             {
                 // textured (URP Lit, HDRP Lit, SpeedTree): foliage is whatever carries a subsurface or thickness map
                 material.SetFloat("_VertexColour", 0f);
-                material.SetTexture("_BaseMap", saved.Texture("_BaseMap", "_MainTex", "_BaseColorMap", "_Albedo"));
+                material.SetTexture("_BaseMap", saved.Texture("_BaseMap", "_MainTex", "_BaseColorMap", "_Albedo", "_Albedo_Map"));
                 material.SetColor("_BaseColor", saved.Colour(Color.white, "_BaseColor", "_Color"));
-                material.SetTexture("_BumpMap", saved.Texture("_BumpMap", "_NormalMap", "_Normal"));
+                material.SetTexture("_BumpMap", saved.Texture("_BumpMap", "_NormalMap", "_Normal", "_Normal_Map"));
                 bool clip = saved.Keyword("_ALPHATEST_ON") || saved.Float(0f, "_AlphaClip", "_AlphaCutoffEnable") > 0.5f ||
                             source.renderQueue >= (int)RenderQueue.AlphaTest && source.renderQueue < (int)RenderQueue.Transparent;
                 bool foliage = saved.Texture("_SubsurfaceTex", "_ThicknessMap", "_TransmissionMaskMap", "_TransmissionThicknessMap") != null;
@@ -235,10 +235,60 @@ namespace Strata.Editor
                 material.SetFloat("_HueVariation", foliage ? 0.12f : 0f);
                 material.SetFloat("_BrightnessVariation", 0.08f);
                 material.SetFloat("_WindSource", 1f);
+                material.SetFloat("_LeafMapOn", 0f);
+                if (source.HasProperty("_Leaf_Texture") && source.HasProperty("_Trunk_Texture")) ConvertSyntyFoliage(material, source);
             }
             if (created) AssetDatabase.CreateAsset(material, path);
             else EditorUtility.SetDirty(material);
             return material;
+        }
+
+        // Synty's foliage shader (POLYGON Nature Biomes and others) keeps its textures in _Trunk_Texture and _Leaf_Texture and
+        // picks the leaf one where vertex alpha is above zero. Leaf cards use the same texture for both: they become plain
+        // alpha-clipped foliage. Whole trees use both: the trunk texture is the base, the leaf texture the Leaf Map, and only
+        // the leaves are foliage and sway (vertex alpha).
+        private static void ConvertSyntyFoliage(Material material, Material source)
+        {
+            Texture trunk = source.GetTexture("_Trunk_Texture");
+            Texture leaf = source.GetTexture("_Leaf_Texture");
+            Vector2 Tiling(string name) => source.HasProperty(name) ? (Vector2)source.GetVector(name) : Vector2.one;
+            Vector2 Offset(string name) => source.HasProperty(name) ? (Vector2)source.GetVector(name) : Vector2.zero;
+            Texture Normal(string toggle, string name) =>
+                source.HasProperty(name) && (!source.HasProperty(toggle) || source.GetFloat(toggle) > 0.5f) ? source.GetTexture(name) : null;
+            float cutoff = source.HasProperty("_Alpha_Clip_Threshold") ? source.GetFloat("_Alpha_Clip_Threshold") : 0.5f;
+
+            material.SetFloat("_AlphaClip", 1f);
+            material.SetFloat("_Cutoff", cutoff > 0f ? cutoff : 0.5f);
+            material.SetFloat("_Cull", (float)CullMode.Off);
+            material.SetFloat("_Translucency", 0.4f);
+            material.SetFloat("_HueVariation", 0.12f);
+            material.SetColor("_BaseColor", Color.white);
+
+            if (leaf == null || trunk == null || leaf == trunk)
+            {
+                Texture texture = leaf != null ? leaf : trunk;
+                material.SetTexture("_BaseMap", texture);
+                material.SetTextureScale("_BaseMap", Tiling("_Leaf_Tiling"));
+                material.SetTextureOffset("_BaseMap", Offset("_Leaf_Offset"));
+                material.SetTexture("_BumpMap", Normal("_Enable_Leaf_Normal", "_Leaf_Normal"));
+                material.SetFloat("_FoliageSource", 0f);
+                material.SetFloat("_Foliage", 1f);
+                return;
+            }
+
+            material.SetTexture("_BaseMap", trunk);
+            material.SetTextureScale("_BaseMap", Tiling("_Trunk_Tiling"));
+            material.SetTextureOffset("_BaseMap", Offset("_Trunk_Offset"));
+            material.SetTexture("_BumpMap", Normal("_Enable_Trunk_Normal", "_Trunk_Normal"));
+            material.SetFloat("_LeafMapOn", 1f);
+            material.SetFloat("_LeafThreshold", 0f);
+            material.SetTexture("_LeafMap", leaf);
+            material.SetTextureScale("_LeafMap", Tiling("_Leaf_Tiling"));
+            material.SetTextureOffset("_LeafMap", Offset("_Leaf_Offset"));
+            material.SetColor("_LeafColor", Color.white);
+            material.SetTexture("_LeafBumpMap", Normal("_Enable_Leaf_Normal", "_Leaf_Normal"));
+            material.SetFloat("_FoliageSource", 2f);
+            material.SetFloat("_WindSource", 0f);
         }
 
         // Smoothness from the source's map where it has one, with alpha as smoothness: SpeedTree's extra map (its
