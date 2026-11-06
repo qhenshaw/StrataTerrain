@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.16.1
+- Leaf Map picks its vertex colour channel (Vertex Colour Channel, alpha by default). Synty foliage marks leaves with
+  vertex blue, not alpha (which is 1 everywhere), so 0.16.0 drew every Synty tree as leaves and clipped its trunks.
+  Converted Synty trees now use blue and sway by height. Rebuild prototypes made from Synty trees to apply.
+- Materials converted from Synty shaders (`Synty/...`) get a constant smoothness of 0: Synty's stylised textures pick up
+  odd reflections with any smoothness.
+
 ## 0.16.0
 - Leaf Map on `Strata/Tree`: a second albedo, colour and normal map used where vertex alpha is above a threshold, for
   meshes that keep trunk and leaves in one material. Shadows, depth and impostors clip by the same choice, and Foliage

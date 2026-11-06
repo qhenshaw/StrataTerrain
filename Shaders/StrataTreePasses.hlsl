@@ -60,7 +60,7 @@ void StrataTreeInput(Varyings input, bool frontFace, out InputData inputData, ou
     float3 normalWS = normalize(input.normalWS) * (frontFace ? 1.0 : -1.0);
     if (_BumpScale > 0.0 && dot(input.tangentWS.xyz, input.tangentWS.xyz) > 1e-6)
     {
-        float3 normalTS = IsLeaf(input.colour.a) > 0.5
+        float3 normalTS = IsLeaf(input.colour) > 0.5
             ? UnpackNormalScale(SAMPLE_TEXTURE2D(_LeafBumpMap, sampler_BumpMap, input.uv * _LeafMap_ST.xy + _LeafMap_ST.zw), _BumpScale)
             : UnpackNormalScale(SAMPLE_TEXTURE2D(_BumpMap, sampler_BumpMap, input.uv * _BaseMap_ST.xy + _BaseMap_ST.zw), _BumpScale);
         float3 tangent = normalize(input.tangentWS.xyz);

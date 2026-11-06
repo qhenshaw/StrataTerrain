@@ -237,6 +237,13 @@ namespace Strata.Editor
                 material.SetFloat("_WindSource", 1f);
                 material.SetFloat("_LeafMapOn", 0f);
                 if (source.HasProperty("_Leaf_Texture") && source.HasProperty("_Trunk_Texture")) ConvertSyntyFoliage(material, source);
+                if (source.shader != null && source.shader.name.StartsWith("Synty/"))
+                {
+                    // Synty's stylised textures pick up odd reflections with any smoothness, so they stay fully rough.
+                    material.SetFloat("_SmoothnessSource", 0f);
+                    material.SetFloat("_Smoothness", 0f);
+                    material.SetTexture("_MaskMap", null);
+                }
             }
             if (created) AssetDatabase.CreateAsset(material, path);
             else EditorUtility.SetDirty(material);
@@ -244,9 +251,9 @@ namespace Strata.Editor
         }
 
         // Synty's foliage shader (POLYGON Nature Biomes and others) keeps its textures in _Trunk_Texture and _Leaf_Texture and
-        // picks the leaf one where vertex alpha is above zero. Leaf cards use the same texture for both: they become plain
+        // picks the leaf one where vertex blue is above zero. Leaf cards use the same texture for both: they become plain
         // alpha-clipped foliage. Whole trees use both: the trunk texture is the base, the leaf texture the Leaf Map, and only
-        // the leaves are foliage and sway (vertex alpha).
+        // the leaves are foliage; the tree sways by height.
         private static void ConvertSyntyFoliage(Material material, Material source)
         {
             Texture trunk = source.GetTexture("_Trunk_Texture");
@@ -282,13 +289,14 @@ namespace Strata.Editor
             material.SetTexture("_BumpMap", Normal("_Enable_Trunk_Normal", "_Trunk_Normal"));
             material.SetFloat("_LeafMapOn", 1f);
             material.SetFloat("_LeafThreshold", 0f);
+            material.SetFloat("_LeafChannel", 2f); // Synty marks leaves with vertex blue
             material.SetTexture("_LeafMap", leaf);
             material.SetTextureScale("_LeafMap", Tiling("_Leaf_Tiling"));
             material.SetTextureOffset("_LeafMap", Offset("_Leaf_Offset"));
             material.SetColor("_LeafColor", Color.white);
             material.SetTexture("_LeafBumpMap", Normal("_Enable_Leaf_Normal", "_Leaf_Normal"));
             material.SetFloat("_FoliageSource", 2f);
-            material.SetFloat("_WindSource", 0f);
+            material.SetFloat("_WindSource", 1f); // Synty's vertex alpha is 1 everywhere, so sway by height
         }
 
         // Smoothness from the source's map where it has one, with alpha as smoothness: SpeedTree's extra map (its
