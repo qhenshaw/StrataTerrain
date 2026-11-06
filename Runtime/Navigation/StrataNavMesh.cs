@@ -279,6 +279,23 @@ namespace Strata
             }
         }
 
+        // Metres the NavMesh reaches from each focus: Radius, capped at the world's collision radius.
+        public float Radius => _world != null ? Mathf.Min(_radius, _world.Settings.CollisionRadius) : _radius;
+
+        // Whether a position is inside a built NavMesh box (on x and z), at least margin metres in from its edges. Boxes
+        // follow their focus in steps of Rebuild Distance, so this is where agents can walk now, not where the focus is.
+        public bool Covers(Vector3 position, float margin = 0f)
+        {
+            float half = Radius - margin;
+            if (half <= 0f) return false;
+            foreach (Volume volume in _volumes)
+            {
+                if (!volume.Built || volume.Removed) continue;
+                if (Mathf.Abs(position.x - volume.Centre.x) <= half && Mathf.Abs(position.z - volume.Centre.z) <= half) return true;
+            }
+            return false;
+        }
+
         private Bounds Bounds(Vector3 centre)
         {
             float radius = Mathf.Min(_radius, _world.Settings.CollisionRadius);

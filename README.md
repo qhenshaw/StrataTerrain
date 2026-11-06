@@ -71,6 +71,7 @@ Non-destructive tiled terrain for Unity 6 URP (PC, DX12/Vulkan).
   (`RegisterFocus`, or a `StrataFocus` component).
 - A `StrataNavMesh` next to the world streams NavMesh around the same foci in play mode, from that collision plus
   colliders on its Extra Layers, with one NavMesh per listed agent type. It uses the engine's `NavMeshBuilder`, so the
-  AI Navigation package isn't needed.
+  AI Navigation package isn't needed. `Covers(position, margin)` tells whether a position is inside a built NavMesh box
+  (e.g. to spawn or wake agents only where they can walk).
 
 Namespace: `Strata`.
