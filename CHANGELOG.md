@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.16.2
+- `StrataNavMesh.Radius` and `StrataNavMesh.Covers(position, margin)`: whether a position is inside a built NavMesh
+  box, so gameplay code can spawn or wake agents only where they can walk.
+
 ## 0.16.1
 - Leaf Map picks its vertex colour channel (Vertex Colour Channel, alpha by default). Synty foliage marks leaves with
   vertex blue, not alpha (which is 1 everywhere), so 0.16.0 drew every Synty tree as leaves and clipped its trunks.
