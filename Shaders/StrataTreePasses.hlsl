@@ -51,6 +51,7 @@ Varyings Vert(Attributes input)
 void StrataTreeInput(Varyings input, bool frontFace, out InputData inputData, out SurfaceData surfaceData)
 {
     StrataFadeClip(input.positionCS.xy, input.fade);
+    StrataOcclusionClip(input.positionWS, input.positionCS.xy);
     half4 albedo = BaseAlbedo(input.uv, input.colour);
     float foliage = input.tree.w;
     albedo.rgb = StrataTreeTint(albedo.rgb, input.tree.xyz, foliage, _HueVariation, _BrightnessVariation);

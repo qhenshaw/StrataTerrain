@@ -65,6 +65,8 @@ Non-destructive tiled terrain for Unity 6 URP (PC, DX12/Vulkan).
 - The surface, caves, trees and grass render forward or, under deferred rendering, into the GBuffer (leaves keep their
   translucency there, added to the lighting buffer). The terrain, caves, and each tree and formation prototype draw on
   rendering layers you choose (grass stays on Default).
+- `StrataOcclusionFade` (on the player) cuts a dithered see-through hole in trees between the camera and it, for
+  top-down cameras; shadows are kept.
 - The surface, trees and grass are drawn through `BatchRendererGroup`: GPU-displaced CDLOD patches, and trees with
   per-tree LOD crossfade and impostors at 16 bytes of GPU memory a tree.
 - Terrain mesh collision, tree trunk capsules and cave colliders are streamed in chunks around focus transforms
