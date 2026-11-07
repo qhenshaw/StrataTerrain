@@ -112,6 +112,32 @@ void StrataFadeClip(float2 pixel, float fade)
     clip(fade > 0.0 ? fade - dither : dither + fade);
 }
 
+// Occlusion fade: a see-through hole in trees between the camera and a target (e.g. the player), set by a
+// StrataOcclusionFade component. Globals (not per material): _StrataOcclusionTarget = target position (w = 1 while on for
+// the camera being drawn), _StrataOcclusionParams = (radius, softness, margin before the target, strength), all in metres
+// except strength (0-1, how much of the hole's centre is cleared). Pixels within the radius of the camera-to-target line
+// and in front of the target are discarded in the same 4x4 dither as the LOD crossfade, thinning out towards the edge.
+float4 _StrataOcclusionTarget;
+float4 _StrataOcclusionParams;
+
+void StrataOcclusionClip(float3 positionWS, float2 pixel)
+{
+    if (_StrataOcclusionTarget.w < 0.5) return;
+    float3 toTarget = _StrataOcclusionTarget.xyz - _WorldSpaceCameraPos;
+    float targetDistance = length(toTarget);
+    float3 direction = toTarget / max(targetDistance, 1e-4);
+    float3 fromCamera = positionWS - _WorldSpaceCameraPos;
+    float along = dot(fromCamera, direction);
+    if (along <= 0.0 || along >= targetDistance - _StrataOcclusionParams.z) return;
+    float offAxis = length(fromCamera - direction * along);
+    float hole = saturate((_StrataOcclusionParams.x - offAxis) / max(_StrataOcclusionParams.y, 1e-3)) * _StrataOcclusionParams.w;
+    if (hole <= 0.0) return;
+    static const float bayer[16] = { 0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5 };
+    uint2 cell = (uint2)pixel % 4u;
+    float dither = (bayer[cell.y * 4 + cell.x] + 0.5) / 16.0;
+    clip(dither - hole);
+}
+
 // Impostor frames cover the upper hemisphere of view directions, laid out octahedrally: the middle of the grid looks
 // straight down, its corners and edges look in from the horizon.
 float2 StrataHemiOctEncode(float3 direction)

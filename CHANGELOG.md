@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.17.0
+- Occlusion fade: a `StrataOcclusionFade` component (e.g. on the player) cuts a dithered see-through hole in Strata
+  trees between the main camera (or a chosen one) and itself, so canopies and trunks don't hide it from a top-down
+  camera. Radius, softness, margin before the target and strength are set on the component; shadows and impostors are
+  unaffected, and other cameras (Scene view) don't see the hole. `Strata/Tree`'s colour, GBuffer, depth and
+  depth-normals passes read two shader globals it sets.
+
 ## 0.16.2
 - `StrataNavMesh.Radius` and `StrataNavMesh.Covers(position, margin)`: whether a position is inside a built NavMesh
   box, so gameplay code can spawn or wake agents only where they can walk.

@@ -301,6 +301,7 @@ Shader "Strata/Tree"
                 float2 uv : TEXCOORD0;
                 nointerpolation float fade : TEXCOORD1;
                 half leaf : TEXCOORD2;
+                float3 positionWS : TEXCOORD3;
             };
 
             Varyings Vert(Attributes input)
@@ -308,7 +309,8 @@ Shader "Strata/Tree"
                 UNITY_SETUP_INSTANCE_ID(input);
                 Varyings output = (Varyings)0;
                 StrataTreeSpace space = StrataTreeInstance();
-                output.positionCS = TransformWorldToHClip(WindyPosition(input, space));
+                output.positionWS = WindyPosition(input, space);
+                output.positionCS = TransformWorldToHClip(output.positionWS);
                 output.uv = input.uv;
                 output.fade = space.fade;
                 output.leaf = IsLeaf(input.color);
@@ -318,6 +320,7 @@ Shader "Strata/Tree"
             half4 Frag(Varyings input) : SV_Target
             {
                 StrataFadeClip(input.positionCS.xy, input.fade);
+                StrataOcclusionClip(input.positionWS, input.positionCS.xy);
                 AlphaOnly(input.uv, input.leaf);
                 return input.positionCS.z;
             }
